@@ -73,9 +73,10 @@ export function normaliseResult(raw) {
     circuits, notes: clean(raw.notes) };
 }
 
-export class AiError extends Error { constructor(code, msg) { super(msg); this.code = code; } }
+export class AiError extends Error { constructor(code, msg, detail = '') { super(msg); this.code = code; this.detail = detail; } }
+export const AI_TIMEOUT_MS = 90000;
 
-export function buildRequest(provider, model, key, base64Jpeg) {
+export function buildRequest(provider, model, key, base64Jpeg, opts = {}) {
   if (provider === 'openai') return { url: 'https://api.openai.com/v1/chat/completions',
     init: { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
       body: JSON.stringify({ model, response_format: { type: 'json_object' }, messages: [{ role: 'user', content: [
@@ -83,7 +84,7 @@ export function buildRequest(provider, model, key, base64Jpeg) {
   return { url: `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
     init: { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
       body: JSON.stringify({ contents: [{ role: 'user', parts: [{ inline_data: { mime_type: 'image/jpeg', data: base64Jpeg } }, { text: PROMPT }] }],
-        generationConfig: { responseMimeType: 'application/json', temperature: 0 } }) } };
+        generationConfig: { responseMimeType: 'application/json', ...(opts.noThinking ? {} : { thinkingConfig: { thinkingLevel: 'low' } }) } }) } };
 }
 
 export function replyText(provider, data) {
@@ -93,8 +94,11 @@ export function replyText(provider, data) {
   return (c?.content?.parts || []).map(p => p.text || '').join('');
 }
 
-function httpError(provider, status, body) {
+function httpError(provider, status, body, raw) {
   const m = body?.error?.message || '';
+  const e = httpError0(provider, status, m); e.detail = `HTTP ${status}: ${String(raw || m).slice(0, 600)}`; return e;
+}
+function httpError0(provider, status, m) {
   if (status === 400 && /api key/i.test(m) || status === 401 || status === 403) return new AiError('key', `Your ${PROVIDERS[provider].label} API key was rejected. Check it in Settings → AI photo import.`);
   if (status === 404) return new AiError('model', `Model not found. Check the model name in Settings (or clear it to use the default). ${m}`);
   if (status === 429) return new AiError('quota', 'AI rate limit or free quota reached. Wait a minute and try again.');
@@ -115,13 +119,42 @@ async function importBoardPhoto(imageDataUrl, settings, deps = {}) {
   if (!online) throw new AiError('offline', 'You’re offline. Photo reading needs a signal – take the photo now and try again when connected, or enter circuits by hand.');
   const b64 = String(imageDataUrl || '').replace(/^data:[^,]+,/, '');
   if (!b64) throw new AiError('bad', 'No photo.');
-  const { url, init } = buildRequest(provider, model, key, b64);
   const f = deps.fetch || globalThis.fetch;
-  let res;
-  try { res = await f(url, init); } catch { throw new AiError('offline', 'Couldn’t reach the AI service. Check your signal and try again.'); }
-  let data = null; try { data = await res.json(); } catch {}
-  if (!res.ok) throw httpError(provider, res.status, data);
-  const out = normaliseResult(extractJson(replyText(provider, data)));
+  const status = deps.onStatus || (() => {});
+  const timeoutMs = deps.timeoutMs ?? AI_TIMEOUT_MS;
+  const send = async opts => {
+    const { url, init } = buildRequest(provider, model, key, b64, opts);
+    const ctl = new AbortController(); let timedOut = false;
+    const outer = deps.signal; const onAbort = () => ctl.abort();
+    if (outer) { if (outer.aborted) ctl.abort(); else outer.addEventListener('abort', onAbort, { once: true }); }
+    const timer = setTimeout(() => { timedOut = true; ctl.abort(); }, timeoutMs);
+    const kb = Math.round(b64.length * 0.75 / 1024);
+    status(`Sending photo (${kb} KB) to ${PROVIDERS[provider].label} – ${model}…`);
+    const t0 = Date.now(); let aborted;
+    try {
+      let res;
+      aborted = new Promise((_, rej) => ctl.signal.addEventListener('abort', () => rej(new Error('aborted')), { once: true }));
+      try { res = await Promise.race([f(url, { ...init, signal: ctl.signal }), aborted]); }
+      catch (e) {
+        if (timedOut) throw new AiError('timeout', `No reply from ${PROVIDERS[provider].label} after ${Math.round(timeoutMs / 1000)} s. Try again, or try a smaller/closer photo.`, `timeout after ${timeoutMs} ms (model ${model}, ${kb} KB)`);
+        if (ctl.signal.aborted) throw new AiError('cancel', 'Cancelled.');
+        throw new AiError('offline', 'Couldn’t reach the AI service. Check your signal and try again.', `${e?.name || 'Error'}: ${e?.message || e}`);
+      }
+      status(`Waiting for reply… (HTTP ${res.status} after ${((Date.now() - t0) / 1000).toFixed(1)} s, reading answer)`);
+      let raw = ''; try { raw = await Promise.race([res.text ? res.text() : res.json().then(JSON.stringify), aborted]); } catch (e) { if (timedOut) throw new AiError('timeout', `Reply took longer than ${Math.round(timeoutMs / 1000)} s.`, 'timeout while reading body'); if (ctl.signal.aborted) throw new AiError('cancel', 'Cancelled.'); throw new AiError('offline', 'Connection dropped while reading the reply.', String(e?.message || e)); }
+      let data = null; try { data = JSON.parse(raw); } catch {}
+      return { res, data, raw };
+    } finally { clearTimeout(timer); outer?.removeEventListener?.('abort', onAbort); }
+  };
+  let { res, data, raw } = await send({});
+  if (provider === 'gemini' && res.status === 400 && /thinking/i.test(raw)) ({ res, data, raw } = await send({ noThinking: true }));
+  if (!res.ok) throw httpError(provider, res.status, data, raw);
+  status('Checking the answer…');
+  let text;
+  try { text = replyText(provider, data); } catch (e) { e.detail ||= raw.slice(0, 600); throw e; }
+  if (!text) { const fr = data?.candidates?.[0]?.finishReason; throw new AiError('bad', `The AI gave an empty answer${fr ? ` (${fr})` : ''}. Try again with a clearer photo.`, raw.slice(0, 600)); }
+  let parsed; try { parsed = extractJson(text); } catch (e) { e.detail = text.slice(0, 600); throw e; }
+  const out = normaliseResult(parsed);
   if (!out.circuits.length) throw new AiError('empty', 'No circuits could be read from that photo. Try closer, straight-on, with the cover open and labels visible.');
   return { ...out, provider, model };
 }

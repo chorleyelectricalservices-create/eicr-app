@@ -5,7 +5,7 @@ import { validateJob, overallAssessment, checkCircuit, circuitMaxZs, codeCounts,
 import { tableMaxZs } from './zs.js';
 import { buildReport } from './pdf.js';
 import { sampleJob } from './sample.js';
-import { ai, aiCfg, PROVIDERS, getKey, setKey, planImport, markImported, boardPlan } from './ai.js';
+import { ai, AI_TIMEOUT_MS, aiCfg, PROVIDERS, getKey, setKey, planImport, markImported, boardPlan } from './ai.js';
 import { parseDictation, FIELD_LABELS } from './voice.js';
 import { boardZe, calcR1R2, calcZs, planCalcAll, markCalc } from './calc.js';
 import { planFill, applyFill, COMMON_VALUES, isSpare } from './fill.js';
@@ -544,22 +544,58 @@ function markRow(tr, c, b) {
 function markRows(b) { main.querySelectorAll('table.ct tbody tr').forEach(tr => markRow(tr, b.circuits[+tr.dataset.r], b)); }
 
 // ---------- AI board photo import ----------
-function downscaleJpeg(file, max = 1600, q = 0.85) {
-  return new Promise((ok, bad) => { const img = new Image(); const u = URL.createObjectURL(file);
-    img.onload = () => { const s = Math.min(1, max / Math.max(img.width, img.height)); const cv = document.createElement('canvas');
-      cv.width = Math.round(img.width * s); cv.height = Math.round(img.height * s); cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
-      URL.revokeObjectURL(u); ok(cv.toDataURL('image/jpeg', q)); };
-    img.onerror = () => { URL.revokeObjectURL(u); bad(new Error('Couldn’t open that photo')); }; img.src = u; });
+const APP_VERSION = '1.5.1';
+const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`${what} timed out after ${ms / 1000} s`)), ms))]);
+function drawToJpeg(src, w, h, max, q) {
+  const s = Math.min(1, max / Math.max(w, h)); const cv = document.createElement('canvas');
+  cv.width = Math.max(1, Math.round(w * s)); cv.height = Math.max(1, Math.round(h * s));
+  const g = cv.getContext('2d'); if (!g) throw new Error('canvas unavailable'); g.drawImage(src, 0, 0, cv.width, cv.height);
+  const url = cv.toDataURL('image/jpeg', q); if (!url.startsWith('data:image/jpeg')) throw new Error('canvas JPEG export failed');
+  return url;
+}
+const readAsDataUrl = f => new Promise((ok, bad) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = () => bad(r.error || new Error('read failed')); r.readAsDataURL(f); });
+/** Shrink a camera photo to ~1600px JPEG. Tries createImageBitmap, then <img>, then sends the original if small enough. */
+async function downscaleJpeg(file, max = 1600, q = 0.85, log = () => {}) {
+  const tries = [];
+  if (window.createImageBitmap) {
+    try { const bm = await withTimeout(createImageBitmap(file, { imageOrientation: 'from-image' }), 20000, 'createImageBitmap');
+      try { return drawToJpeg(bm, bm.width, bm.height, max, q); } finally { bm.close?.(); } }
+    catch (e) { tries.push('bitmap: ' + e.message); log('Preparing photo… (trying another way)'); }
+  }
+  try {
+    const u = URL.createObjectURL(file);
+    try { const img = await withTimeout(new Promise((ok, bad) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => bad(new Error('image decode failed')); i.src = u; }), 20000, 'image load');
+      return drawToJpeg(img, img.naturalWidth, img.naturalHeight, max, q); } finally { URL.revokeObjectURL(u); }
+  } catch (e) { tries.push('img: ' + e.message); }
+  if (/^image\/(jpeg|png|webp|heic|heif)$/.test(file.type) && file.size < 7e6) { const d = await withTimeout(readAsDataUrl(file), 20000, 'file read'); return d.replace(/^data:[^;]+/, 'data:image/jpeg'); }
+  const err = new Error('Couldn’t open that photo on this phone. Try taking it again, or pick a JPEG from the gallery.'); err.detail = `${file.type || 'unknown type'} ${Math.round(file.size / 1024)} KB · ${tries.join(' · ')}`; throw err;
 }
 async function boardPhotoFlow(file, b) {
   const cfg = aiCfg(settings);
   if (!ai.configured(settings)) { if (confirm(`Photo reading needs a free ${PROVIDERS[cfg.provider].label} API key (one-off setup). Open Settings now?`)) location.hash = '#/settings'; return; }
-  modal('<h2>📷 Reading the board…</h2><p class="muted">Sending the photo to ' + esc(PROVIDERS[cfg.provider].label) + ' (' + esc(cfg.model) + '). This takes 5–30 seconds.</p>');
-  let img, res;
-  try { img = await downscaleJpeg(file); res = await ai.importBoardPhoto(img, settings); }
-  catch (err) { modal(`<h2>Couldn’t read the board</h2><p>${esc(err.message)}</p><div class="btns">${err.code === 'nokey' || err.code === 'key' || err.code === 'model' ? '<button class="btn" id="goSet">Open Settings</button>' : ''}<button class="btn pri" id="mclose">OK</button></div>`);
-    $('#goSet') && ($('#goSet').onclick = () => { closeModal(); location.hash = '#/settings'; }); return; }
-  reviewImport(res, img, b);
+  const ctl = new AbortController(); const t0 = Date.now(); let step = 'Preparing photo…';
+  modal(`<h2>📷 Reading the board…</h2><p id="aiStep"><b>${esc(step)}</b></p><p class="muted" id="aiTime">0 s</p><p class="muted">${esc(PROVIDERS[cfg.provider].label)} · ${esc(cfg.model)}. Usually 5–40 s, gives up after ${Math.round(AI_TIMEOUT_MS / 1000)} s.</p><div class="btns"><button class="btn" id="aiCancel">Cancel</button></div>`);
+  const setStep = t => { step = t; const el = $('#aiStep'); if (el) el.innerHTML = `<b>${esc(t)}</b>`; };
+  const tick = setInterval(() => { const el = $('#aiTime'); if (el) el.textContent = `${Math.round((Date.now() - t0) / 1000)} s`; }, 1000);
+  let cancelled = false;
+  $('#aiCancel').onclick = () => { cancelled = true; ctl.abort(); clearInterval(tick); closeModal(); toast('Photo reading cancelled'); };
+  const dlg = $('#modal'); const onClose = () => { if (!cancelled) { cancelled = true; ctl.abort(); clearInterval(tick); } }; dlg.addEventListener('close', onClose, { once: true });
+  try {
+    const img = await downscaleJpeg(file, 1600, 0.85, setStep);
+    if (cancelled) return;
+    const res = await ai.importBoardPhoto(img, settings, { signal: ctl.signal, onStatus: setStep });
+    if (cancelled) return;
+    clearInterval(tick); dlg.removeEventListener('close', onClose);
+    reviewImport(res, img, b);
+  } catch (err) {
+    clearInterval(tick); dlg.removeEventListener('close', onClose);
+    if (cancelled || err.code === 'cancel') return;
+    console.error('AI import', err);
+    const detail = [`step: ${step}`, `after ${((Date.now() - t0) / 1000).toFixed(1)} s`, `model: ${cfg.provider}/${cfg.model}`, `online: ${navigator.onLine}`, `file: ${file.type || '?'} ${Math.round(file.size / 1024)} KB`, `error: ${err.name || ''} ${err.code || ''} ${err.message}`, err.detail ? `detail: ${err.detail}` : '', `app: ${APP_VERSION}`].filter(Boolean).join('\n');
+    modal(`<h2>Couldn’t read the board</h2><p>${esc(err.message || String(err))}</p><details><summary>Details (for support)</summary><pre style="white-space:pre-wrap;font-size:11px;max-height:200px;overflow:auto" id="aiDet">${esc(detail)}</pre><button class="btn" id="aiCopy">Copy details</button></details><div class="btns">${['nokey', 'key', 'model'].includes(err.code) ? '<button class="btn" id="goSet">Open Settings</button>' : ''}<button class="btn pri" id="mclose">OK</button></div>`);
+    $('#goSet') && ($('#goSet').onclick = () => { closeModal(); location.hash = '#/settings'; });
+    $('#aiCopy').onclick = () => navigator.clipboard?.writeText(detail).then(() => toast('Copied'), () => toast('Long-press the text to copy'));
+  }
 }
 function reviewImport(res, img, b) {
   const rows = res.circuits.map(r => ({ ...r, keep: true }));
@@ -800,7 +836,7 @@ function flash(rows) {
 $('#micFab').onclick = startDictation;
 
 // ---------- modal & signature ----------
-function modal(html) { $('#modalBody').innerHTML = html; $('#modal').showModal(); $('#mclose') && ($('#mclose').onclick = closeModal); }
+function modal(html) { $('#modalBody').innerHTML = html; if (!$('#modal').open) $('#modal').showModal(); $('#mclose') && ($('#mclose').onclick = closeModal); }
 function closeModal() { $('#modal').close(); $('#modalBody').onclick = null; }
 function signaturePad(done) {
   modal(`<h2>Sign with your finger</h2><canvas class="sigpad" id="sp"></canvas><div class="btns"><button class="btn" id="spc">Clear</button><button class="btn" id="spx">Cancel</button><button class="btn pri" id="spok">Use signature</button></div>`);

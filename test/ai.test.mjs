@@ -10,7 +10,7 @@ const MODEL_JSON = {
     { no: '3', desc: '', device: 'thing', bsen: 'unknown', type: 'Z', rating: 'six', bc: '', unreadable: [], confidence: 'weird' },
   ], notes: 'glare on way 3' };
 const gemReply = obj => ({ candidates: [{ content: { parts: [{ text: '```json\n' + JSON.stringify(obj) + '\n```' }] } }] });
-const okFetch = (body, status = 200) => async (url, init) => { okFetch.last = { url, init }; return { ok: status < 300, status, json: async () => body }; };
+const okFetch = (body, status = 200) => async (url, init) => { okFetch.last = { url, init }; return { ok: status < 300, status, text: async () => JSON.stringify(body) }; };
 const S = { ai: { provider: 'gemini', model: '' } };
 const IMG = 'data:image/jpeg;base64,AAAA';
 
@@ -74,4 +74,26 @@ test('imported marking + config defaults', () => {
   const c = {}; markImported(c, 'rating', true); assert.deepEqual(c.imp, { rating: true }); markImported(c, 'rating', false); assert.deepEqual(c.imp, {});
   assert.deepEqual(aiCfg({}), { provider: 'gemini', model: 'gemini-3.8-flash' });
   assert.equal(buildRequest('gemini', 'x y', 'k', 'A').url.includes('x%20y'), true);
+});
+
+test('timeout: hung fetch ends in a clear error, not forever', async () => {
+  const hang = () => new Promise(() => {});
+  await assert.rejects(ai.importBoardPhoto(IMG, S, { key: 'k', online: true, fetch: hang, timeoutMs: 50 }), e => e.code === 'timeout' && /No reply/.test(e.message) && /timeout/.test(e.detail));
+});
+test('cancel via signal', async () => {
+  const ctl = new AbortController(); setTimeout(() => ctl.abort(), 20);
+  await assert.rejects(ai.importBoardPhoto(IMG, S, { key: 'k', online: true, fetch: () => new Promise(() => {}), signal: ctl.signal }), e => e.code === 'cancel');
+});
+test('status steps + low thinking, retry without thinking if rejected', async () => {
+  const steps = []; const bodies = [];
+  const f = async (u, i) => { bodies.push(JSON.parse(i.body)); return bodies.length === 1
+    ? { ok: false, status: 400, text: async () => JSON.stringify({ error: { message: 'Unknown name "thinkingConfig"' } }) }
+    : { ok: true, status: 200, text: async () => JSON.stringify(gemReply(MODEL_JSON)) }; };
+  const r = await ai.importBoardPhoto(IMG, S, { key: 'k', online: true, fetch: f, onStatus: s => steps.push(s) });
+  assert.equal(r.circuits.length, 3);
+  assert.equal(bodies[0].generationConfig.thinkingConfig.thinkingLevel, 'low'); assert.equal(bodies[1].generationConfig.thinkingConfig, undefined);
+  assert.ok(steps.some(s => /^Sending/.test(s)) && steps.some(s => /^Waiting/.test(s)));
+});
+test('error detail carries raw server message', async () => {
+  await assert.rejects(ai.importBoardPhoto(IMG, S, { key: 'k', online: true, fetch: okFetch({ error: { message: 'boom' } }, 500) }), e => e.code === 'http' && /HTTP 500/.test(e.detail) && /boom/.test(e.detail));
 });
