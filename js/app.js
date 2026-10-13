@@ -535,7 +535,6 @@ function renderBoards() {
     if (t.id === 'instLoad') { job.instruments = { ...settings.instruments }; scheduleSave(); renderBoards(); }
     if (t.id === 'dictate') { startDictation(); return; }
     if (t.id === 'undoDict') { undoDictation(); return; }
-    if (t.id === 'aiPhoto') toast('AI photo import is coming in a later version');
   });
 }
 function markRow(tr, c, b) {

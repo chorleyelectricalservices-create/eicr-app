@@ -1,5 +1,5 @@
 // Offline-first service worker. Bump VERSION when files change.
-const VERSION = 'eicr-v1.5.0';
+const VERSION = 'eicr-v1.5.1';
 const ASSETS = ['./', 'index.html', 'styles.css', 'manifest.webmanifest',
   'js/app.js', 'js/db.js', 'js/model.js', 'js/presets.js', 'js/validate.js', 'js/zs.js', 'js/pdf.js', 'js/sample.js', 'js/ai.js', 'js/voice.js', 'js/default-logo.js', 'js/links.js', 'js/fill.js', 'js/calc.js',
   'vendor/jspdf.umd.min.js', 'vendor/jspdf.plugin.autotable.min.js',
