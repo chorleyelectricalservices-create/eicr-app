@@ -5,7 +5,7 @@ import { validateJob, overallAssessment, checkCircuit, circuitMaxZs, codeCounts,
 import { tableMaxZs } from './zs.js';
 import { buildReport } from './pdf.js';
 import { sampleJob } from './sample.js';
-import { ai } from './ai.js';
+import { ai, aiCfg, PROVIDERS, getKey, setKey, planImport, markImported, boardPlan } from './ai.js';
 import { parseDictation, FIELD_LABELS } from './voice.js';
 import { boardZe, calcR1R2, calcZs, planCalcAll, markCalc } from './calc.js';
 import { planFill, applyFill, COMMON_VALUES, isSpare } from './fill.js';
@@ -306,7 +306,7 @@ const VIEWS = {
         ${fld(`observations.${i}.code`, 'Code', { type: 'seg', options: CODES })}
         <div class="row">${fld(`observations.${i}.location`, 'Location')}${fld(`observations.${i}.reg`, 'Regulation')}</div>
         ${fld(`observations.${i}.schedRef`, 'Other schedule ref (e.g. CU1/3)')}
-        ${ai.available(settings) ? `<button class="btn" data-ai="${i}">✨ Tidy wording</button>` : ''}
+        
         <button class="btn" data-save="${i}">☆ Save to my library</button></div>`).join('')}`;
     const redraw = () => { const y = scrollY; VIEWS.observations(); scrollTo(0, y); };
     const relink = () => { recalcSchedule(job); scheduleSave(); };
@@ -415,7 +415,8 @@ const COLS = [
   ['polarity', 'Pol', 'cyc'], ['zs', 'Zs Ω', 'num', 'w2', 'Tests'], ['rcdTime', 'RCD ms', 'num', 'w2'], ['rcd5x', '5× ms', 'num', 'w2'], ['rcdBtn', 'RCD btn', 'cyc'], ['afddBtn', 'AFDD btn', 'cyc'],
   ['remarks', 'Remarks', 'text', 'w5'],
 ];
-function cell(c, [k, , kind, opt], ci) {
+function cell(c, col, ci) { const h = cell0(c, col, ci); return c.imp?.[col[0]] ? `<div class="impwrap">${h.replace(/^<(input|select)/, '<$1 data-imp="1"')}<span class="imptag">AI</span></div>` : h; }
+function cell0(c, [k, , kind, opt], ci) {
   const v = c[k] ?? '';
   if (kind === 'sel') return `<select data-c="${k}">${opt.map(o => `<option${String(v) === o ? ' selected' : ''}>${o}</option>`).join('')}${opt.includes(String(v)) ? '' : `<option selected>${esc(v)}</option>`}</select>`;
   if (kind === 'cyc') return `<button class="cyc" data-cyc="${k}">${esc(v)}</button>`;
@@ -441,9 +442,9 @@ function renderBoards() {
     ${fld(`boards.${currentBoard}.polarityOk`, 'Correct polarity confirmed', { type: 'check' })}${fld(`boards.${currentBoard}.phaseSeqOk`, 'Phase sequence confirmed (3-phase)', { type: 'check' })}${fld(`boards.${currentBoard}.spdOk`, 'SPD operational status confirmed', { type: 'check' })}
     <div class="btns"><button class="btn" id="zdbZe">Zdb/Ipf = origin (Ze, Ipf)</button><button class="btn danger" id="delB">Delete board</button></div></details>
   <div class="card"><h2>Circuits (${b.circuits.length})</h2>
-    <div class="btns"><button class="btn pri" id="dictate" style="font-size:17px">🎤 Dictate results</button>${voiceUndo.length ? '<button class="btn" id="undoDict">↶ Undo last dictation/fill</button>' : ''}</div>
+    <div class="btns"><button class="btn pri" id="dictate" style="font-size:17px">🎤 Dictate results</button><label class="btn" id="aiPhoto" style="font-size:17px;display:inline-flex;align-items:center">📷 Photo of board<input type="file" id="aiFile" accept="image/*" capture="environment" hidden></label>${voiceUndo.length ? '<button class="btn" id="undoDict">↶ Undo last dictation/fill</button>' : ''}</div>
     <div class="muted">Quick add:</div><div class="fillbar">${QUICK_CIRCUITS.map((q, i) => `<button class="btn" data-q="${i}">＋ ${esc(q.name)}</button>`).join('')}<button class="btn" data-q="-1">＋ Blank</button></div>
-    <div class="muted">Fill all rows:</div><div class="fillbar"><button class="btn" data-fill="polarity">Polarity ✓</button><button class="btn" data-fill="testV">IR 500 V</button><button class="btn" data-fill="ir">IR &gt;999</button><button class="btn" data-fill="rcdBtn">RCD btn ✓</button><button class="btn" data-fill="afddBtn">AFDD N/A</button><button class="btn" data-fill="bc">kA 6</button>${ai.available(settings) ? '<button class="btn" id="aiPhoto">📷 Read board photo</button>' : ''}</div>
+    <div class="muted">Fill all rows:</div><div class="fillbar"><button class="btn" data-fill="polarity">Polarity ✓</button><button class="btn" data-fill="testV">IR 500 V</button><button class="btn" data-fill="ir">IR &gt;999</button><button class="btn" data-fill="rcdBtn">RCD btn ✓</button><button class="btn" data-fill="afddBtn">AFDD N/A</button><button class="btn" data-fill="bc">kA 6</button></div>
     <div class="tbl-wrap"><table class="ct"><thead>
       <tr><th>No</th>${COLS.map(c => `<th>${c[1]}${c[2] === 'mz' ? '' : `<br><button class="fillcol" data-fillcol="${c[0]}" aria-label="Fill ${esc(c[1])} column">⬇</button>`}</th>`).join('')}</tr></thead>
       <tbody>${b.circuits.map((c, i) => `<tr data-r="${i}"><td class="no"><input data-c="no" inputmode="numeric" value="${esc(c.no)}"><button class="rowbtn" data-act="${i}" aria-label="Row actions">⋮</button></td>${COLS.map((col, ci) => `<td${col[2] === 'mz' ? ' class="mzc"' : ''}>${cell(c, col, ci)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
@@ -461,11 +462,13 @@ function renderBoards() {
     const el = e.target; const k = el.dataset.c; if (!k) return; e.stopPropagation();
     const tr = el.closest('tr'); const c = b.circuits[+tr.dataset.r];
     if (k === 'maxZs') { c.maxZs = el.value; c.maxZsManual = el.value.trim() !== ''; } else c[k] = el.value;
+    if (c.imp?.[k]) { markImported(c, k, false); el.removeAttribute('data-imp'); el.parentElement.querySelector('.imptag')?.remove(); }
     if (c.calc?.[k]) { markCalc(c, k, false); el.classList.remove('calcd'); el.parentElement.querySelector('.calctag')?.remove(); }
     if (k === 'desc' && /ring/i.test(el.value)) c.ring = true;
     if (['bsen', 'type', 'rating', 'maxDisc'].includes(k)) { const m = tableMaxZs(c.bsen, c.type, c.rating, c.maxDisc); tr.querySelector('[data-c="maxZs"]').placeholder = m ?? '?'; }
     scheduleSave(); markRow(tr, c, b);
   });
+  $('#aiFile') && ($('#aiFile').onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) boardPhotoFlow(f, b); });
   main.addEventListener('click', e => {
     const t = e.target.closest('button'); if (!t) return;
     if (t.dataset.b != null) { currentBoard = +t.dataset.b; renderBoards(); return; }
@@ -541,6 +544,65 @@ function markRow(tr, c, b) {
 }
 function markRows(b) { main.querySelectorAll('table.ct tbody tr').forEach(tr => markRow(tr, b.circuits[+tr.dataset.r], b)); }
 
+// ---------- AI board photo import ----------
+function downscaleJpeg(file, max = 1600, q = 0.85) {
+  return new Promise((ok, bad) => { const img = new Image(); const u = URL.createObjectURL(file);
+    img.onload = () => { const s = Math.min(1, max / Math.max(img.width, img.height)); const cv = document.createElement('canvas');
+      cv.width = Math.round(img.width * s); cv.height = Math.round(img.height * s); cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+      URL.revokeObjectURL(u); ok(cv.toDataURL('image/jpeg', q)); };
+    img.onerror = () => { URL.revokeObjectURL(u); bad(new Error('Couldn’t open that photo')); }; img.src = u; });
+}
+async function boardPhotoFlow(file, b) {
+  const cfg = aiCfg(settings);
+  if (!ai.configured(settings)) { if (confirm(`Photo reading needs a free ${PROVIDERS[cfg.provider].label} API key (one-off setup). Open Settings now?`)) location.hash = '#/settings'; return; }
+  modal('<h2>📷 Reading the board…</h2><p class="muted">Sending the photo to ' + esc(PROVIDERS[cfg.provider].label) + ' (' + esc(cfg.model) + '). This takes 5–30 seconds.</p>');
+  let img, res;
+  try { img = await downscaleJpeg(file); res = await ai.importBoardPhoto(img, settings); }
+  catch (err) { modal(`<h2>Couldn’t read the board</h2><p>${esc(err.message)}</p><div class="btns">${err.code === 'nokey' || err.code === 'key' || err.code === 'model' ? '<button class="btn" id="goSet">Open Settings</button>' : ''}<button class="btn pri" id="mclose">OK</button></div>`);
+    $('#goSet') && ($('#goSet').onclick = () => { closeModal(); location.hash = '#/settings'; }); return; }
+  reviewImport(res, img, b);
+}
+function reviewImport(res, img, b) {
+  const rows = res.circuits.map(r => ({ ...r, keep: true }));
+  const F = [['no', 'Way', 'w1'], ['desc', 'Description', 'w5'], ['device', 'Device', 'w2'], ['bsen', 'BS EN', 'w2'], ['type', 'Curve', 'w1'], ['rating', 'A', 'w1'], ['bc', 'kA', 'w1'], ['rcdType', 'RCD type', 'w1'], ['idn', 'IΔn mA', 'w1']];
+  const bi = res.board; const has = b.circuits.length > 0;
+  modal(`<h2>Check what was read</h2>
+    <p class="muted">Nothing is saved until you tap Apply. <b class="warn">Orange</b> = couldn’t read clearly (left blank) – fill in or leave. Always check against the board.</p>
+    <img src="${img}" alt="board photo" style="max-width:100%;max-height:220px;display:block;margin:0 auto 8px;border-radius:6px">
+    <p><b>Board:</b> ${esc(bi.make || 'make not read')}${bi.mainSwitchRating ? ` · main switch ${esc(bi.mainSwitchRating)} A` : ''}${bi.rcds.map(r => ` · RCD ${esc([r.label, r.rating && r.rating + 'A', r.idn && r.idn + 'mA', r.type && 'Type ' + r.type].filter(Boolean).join(' '))}${r.covers.length ? ` (ways ${esc(r.covers.join(','))})` : ''}`).join('')}</p>
+    ${res.notes ? `<p class="muted">AI notes: ${esc(res.notes)}</p>` : ''}
+    <div class="tbl-wrap"><table class="ct imprev"><thead><tr><th>Use</th>${F.map(f => `<th>${f[1]}</th>`).join('')}<th>Conf.</th></tr></thead><tbody>
+    ${rows.map((r, i) => `<tr data-i="${i}"><td><input type="checkbox" data-k="keep" checked></td>${F.map(([k, , w]) => `<td><input class="${w}${r.unreadable.includes(k) ? ' unread' : ''}" data-k="${k}" value="${esc(r[k])}" ${r.unreadable.includes(k) ? 'placeholder="?"' : ''}></td>`).join('')}<td class="conf-${r.confidence}">${r.confidence}</td></tr>`).join('')}
+    </tbody></table></div>
+    ${has ? `<div class="seg" id="impMode" style="margin:10px 0"><button type="button" data-m="merge" class="on">Merge into my ${b.circuits.length} circuits</button><button type="button" data-m="replace">Replace all circuits</button></div>
+    <p class="muted" id="impNote">Merge matches by way number and only fills empty boxes – your test results are never touched.</p>` : ''}
+    <div class="btns"><button class="btn" id="mclose">Cancel</button><button class="btn pri" id="impOk">Apply</button></div>`);
+  let mode = 'merge';
+  $('#modalBody').oninput = e => { const tr = e.target.closest('tr[data-i]'); if (!tr) return; const r = rows[+tr.dataset.i]; const k = e.target.dataset.k;
+    if (k === 'keep') r.keep = e.target.checked; else { r[k] = e.target.value; r.unreadable = r.unreadable.filter(x => x !== k); r.edited = { ...(r.edited || {}), [k]: true }; e.target.classList.remove('unread'); } };
+  $('#impMode') && ($('#impMode').onclick = e => { const t = e.target.closest('[data-m]'); if (!t) return; mode = t.dataset.m;
+    $('#impMode').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === t));
+    $('#impNote').textContent = mode === 'replace' ? 'Replace deletes the current circuit rows on this board (including any test results) and uses the list above.' : 'Merge matches by way number and only fills empty boxes – your test results are never touched.'; });
+  $('#impOk').onclick = () => {
+    const use = rows.filter(r => r.keep);
+    if (mode === 'replace' && has && !confirm(`Delete the ${b.circuits.length} existing circuits on ${b.ref} and replace with ${use.length} from the photo?`)) return;
+    const plan = planImport(b.circuits, use, has ? mode : 'replace');
+    if (mode === 'replace' || !has) b.circuits = [];
+    let added = 0, upd = 0;
+    for (const p of plan) {
+      const r = use.find(x => x.no === p.no) || {};
+      let c = p.index != null ? b.circuits[p.index] : null;
+      if (!c) { c = newCircuit(p.no); b.circuits.push(c); added++; } else upd++;
+      for (const [k, v] of Object.entries(p.set)) { c[k] = v; markImported(c, k, !r.edited?.[k]); }
+      if (/ring/i.test(c.desc)) c.ring = true;
+    }
+    b.circuits.sort((x, y) => (parseInt(x.no) || 999) - (parseInt(y.no) || 999));
+    const bs = boardPlan(b, bi); Object.assign(b, bs);
+    closeModal(); scheduleSave(); renderBoards();
+    toast(`${added} circuits added, ${upd} updated${Object.keys(bs).length ? ', board RCD filled' : ''}. AI values are tagged until you edit them.`, 4000);
+  };
+}
+
 // ---------- settings ----------
 function renderSettings() {
     fresh();
@@ -556,6 +618,12 @@ function renderSettings() {
     <div class="row">${fld('instruments.multi', 'Multi-function', { obj: settings, scope: 'settings' })}${fld('instruments.ir', 'Insulation', { obj: settings, scope: 'settings' })}</div>
     <div class="row">${fld('instruments.continuity', 'Continuity', { obj: settings, scope: 'settings' })}${fld('instruments.loop', 'Earth fault loop', { obj: settings, scope: 'settings' })}</div>
     <div class="row">${fld('instruments.rcd', 'RCD', { obj: settings, scope: 'settings' })}${fld('instruments.earth', 'Earth electrode', { obj: settings, scope: 'settings' })}</div></div>
+  <div class="card"><h2>AI photo import</h2>
+    <p class="muted">Reads circuits from a photo of the board. Your key is kept only on this phone (not in backups). The photo goes straight from your phone to the AI company you pick.</p>
+    <label class="f"><span>AI provider</span></label><div class="seg" id="aiProv" style="margin-bottom:12px">${Object.entries(PROVIDERS).map(([k, v]) => `<button type="button" data-prov="${k}" class="${aiCfg(settings).provider === k ? 'on' : ''}">${v.label}</button>`).join('')}</div>
+    <label class="f"><span>${PROVIDERS[aiCfg(settings).provider].label} API key</span><input id="aiKey" type="password" autocomplete="off" placeholder="paste key" value="${esc(getKey(aiCfg(settings).provider))}"></label>
+    <p class="muted"><a href="${PROVIDERS[aiCfg(settings).provider].keyUrl}" target="_blank" rel="noopener">Get a key ↗</a>${aiCfg(settings).provider === 'gemini' ? ' (free – sign in with Google, tap “Create API key”)' : ' (paid account)'}</p>
+    <label class="f"><span>Model (blank = ${PROVIDERS[aiCfg(settings).provider].defaultModel})</span><input id="aiModel" placeholder="${PROVIDERS[aiCfg(settings).provider].defaultModel}" value="${esc(settings.ai?.model || '')}"></label></div>
   <div class="card"><h2>Reports</h2><div class="row">${fld('reportPrefix', 'Report no. prefix', { obj: settings, scope: 'settings' })}${fld('nextNumber', 'Next number', { obj: settings, scope: 'settings', type: 'num' })}</div>
     ${fld('defaultInterval', 'Default next inspection (years)', { obj: settings, scope: 'settings', type: 'seg', options: ['1', '3', '5', '10'] })}
     ${fld('zsRuleOfThumb', 'Check measured Zs against 0.8 × tabulated max (rule of thumb)', { obj: settings, scope: 'settings', type: 'check' })}</div>
@@ -565,6 +633,9 @@ function renderSettings() {
   <div class="card"><h2>Demo</h2><button class="btn" id="sample">Load sample domestic job</button>
     <p class="muted">EICR Pad v1 · data stored only on this device · works offline once opened.</p></div>`;
   bindFields(main, settings);
+  $('#aiProv').onclick = async e => { const t = e.target.closest('[data-prov]'); if (!t) return; settings.ai = { provider: t.dataset.prov, model: '' }; await saveSettings(); const y = scrollY; renderSettings(); scrollTo(0, y); };
+  $('#aiKey').onchange = e => { setKey(aiCfg(settings).provider, e.target.value); toast(e.target.value.trim() ? 'Key saved on this phone' : 'Key removed'); };
+  $('#aiModel').onchange = async e => { settings.ai = { ...aiCfg(settings), model: e.target.value.trim() }; await saveSettings(); };
   $('#logo').onchange = async e => { const f = e.target.files[0]; if (!f) return; settings.contractor.logo = await shrinkImage(f, 600, 280); await saveSettings(); renderSettings(); };
   $('#rmLogo') && ($('#rmLogo').onclick = async () => { settings.contractor.logo = ''; settings.contractor.logoRemoved = true; await saveSettings(); renderSettings(); });
   $('#sig').onclick = () => signaturePad(async url => { settings.inspector.signature = url; await saveSettings(); renderSettings(); });

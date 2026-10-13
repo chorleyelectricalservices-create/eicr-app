@@ -19,7 +19,7 @@ export function defaultSettings() {
     reportPrefix: 'EICR-', nextNumber: 1,
     zsRuleOfThumb: true, defaultInterval: 5,
     obsLibrary: null, // null = use built-in list
-    aiProvider: { enabled: false, endpoint: '', model: '' }, // reserved for later AI features
+    ai: { provider: 'gemini', model: '' }, // AI photo import; API keys are kept in localStorage only
   };
 }
 

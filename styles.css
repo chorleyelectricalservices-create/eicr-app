@@ -103,3 +103,9 @@ table.ct th .fillcol{min-width:40px;min-height:34px;margin-top:2px;border:1px so
 .calcbtn{min-width:34px;min-height:44px;border:1px solid var(--line);border-radius:6px;background:#fff7ed;color:#c2410c;font-weight:800;font-size:18px}
 table.ct input.calcd{font-style:italic;background:#fff7ed;border-color:#f39200}
 .calctag{position:absolute;left:3px;top:-1px;font-size:9px;font-weight:700;color:#c2410c;background:#fff;padding:0 2px;border-radius:3px}
+.impwrap{position:relative}
+table.ct [data-imp]{background:#eef6ff;border-color:#3b82f6}
+.imptag{position:absolute;left:3px;top:-1px;font-size:9px;font-weight:700;color:#1d4ed8;background:#fff;padding:0 2px;border-radius:3px}
+table.imprev input.unread{background:#fff7ed;border-color:#f39200}
+.conf-low{color:#b91c1c;font-weight:700}.conf-medium{color:#c2410c}.conf-high{color:#15803d}
+b.warn{color:#c2410c}
