@@ -544,7 +544,7 @@ function markRow(tr, c, b) {
 function markRows(b) { main.querySelectorAll('table.ct tbody tr').forEach(tr => markRow(tr, b.circuits[+tr.dataset.r], b)); }
 
 // ---------- AI board photo import ----------
-const APP_VERSION = '1.5.1';
+const APP_VERSION = '1.5.2';
 const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`${what} timed out after ${ms / 1000} s`)), ms))]);
 function drawToJpeg(src, w, h, max, q) {
   const s = Math.min(1, max / Math.max(w, h)); const cv = document.createElement('canvas');
@@ -574,7 +574,7 @@ async function boardPhotoFlow(file, b) {
   const cfg = aiCfg(settings);
   if (!ai.configured(settings)) { if (confirm(`Photo reading needs a free ${PROVIDERS[cfg.provider].label} API key (one-off setup). Open Settings now?`)) location.hash = '#/settings'; return; }
   const ctl = new AbortController(); const t0 = Date.now(); let step = 'Preparing photo…';
-  modal(`<h2>📷 Reading the board…</h2><p id="aiStep"><b>${esc(step)}</b></p><p class="muted" id="aiTime">0 s</p><p class="muted">${esc(PROVIDERS[cfg.provider].label)} · ${esc(cfg.model)}. Usually 5–40 s, gives up after ${Math.round(AI_TIMEOUT_MS / 1000)} s.</p><div class="btns"><button class="btn" id="aiCancel">Cancel</button></div>`);
+  modal(`<h2>📷 Reading the board…</h2><p id="aiStep"><b>${esc(step)}</b></p><p class="muted" id="aiTime">0 s</p><p class="muted">${esc(PROVIDERS[cfg.provider].label)} · ${esc(cfg.model)}. Usually 5–40 s; retries if Google is busy; gives up after ${Math.round(AI_TIMEOUT_MS / 1000)} s.</p><div class="btns"><button class="btn" id="aiCancel">Cancel</button></div>`);
   const setStep = t => { step = t; const el = $('#aiStep'); if (el) el.innerHTML = `<b>${esc(t)}</b>`; };
   const tick = setInterval(() => { const el = $('#aiTime'); if (el) el.textContent = `${Math.round((Date.now() - t0) / 1000)} s`; }, 1000);
   let cancelled = false;

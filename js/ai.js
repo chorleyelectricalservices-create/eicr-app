@@ -74,7 +74,16 @@ export function normaliseResult(raw) {
 }
 
 export class AiError extends Error { constructor(code, msg, detail = '') { super(msg); this.code = code; this.detail = detail; } }
-export const AI_TIMEOUT_MS = 90000;
+export const AI_TIMEOUT_MS = 120000; // overall, across retries and backup models
+export const RETRYABLE = [429, 500, 502, 503, 504];
+export const RETRY_DELAYS = [2000, 5000];
+export const GEMINI_FALLBACK = ['gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-3.5-flash-lite'];
+/** Models to try in order: the user's own model only, or the default chain. */
+export function modelChain(settings) {
+  const a = settings?.ai || {}; const { provider, model } = aiCfg(settings);
+  if ((a.model || '').trim() || provider !== 'gemini') return [model];
+  return GEMINI_FALLBACK;
+}
 
 export function buildRequest(provider, model, key, base64Jpeg, opts = {}) {
   if (provider === 'openai') return { url: 'https://api.openai.com/v1/chat/completions',
@@ -101,6 +110,7 @@ function httpError(provider, status, body, raw) {
 function httpError0(provider, status, m) {
   if (status === 400 && /api key/i.test(m) || status === 401 || status === 403) return new AiError('key', `Your ${PROVIDERS[provider].label} API key was rejected. Check it in Settings → AI photo import.`);
   if (status === 404) return new AiError('model', `Model not found. Check the model name in Settings (or clear it to use the default). ${m}`);
+  if ([500, 502, 503, 504].includes(status)) return new AiError('busy', `${PROVIDERS[provider].label} is overloaded right now (error ${status}). Tried again and with backup models – please try again in a few minutes.`);
   if (status === 429) return new AiError('quota', 'AI rate limit or free quota reached. Wait a minute and try again.');
   return new AiError('http', `AI service error ${status}${m ? ': ' + m : ''}`);
 }
@@ -112,7 +122,8 @@ function httpError0(provider, status, m) {
  * @param {{fetch?:Function, key?:string, online?:boolean}} deps for tests
  */
 async function importBoardPhoto(imageDataUrl, settings, deps = {}) {
-  const { provider, model } = aiCfg(settings);
+  const { provider } = aiCfg(settings); let model = aiCfg(settings).model;
+  const models = modelChain(settings);
   const key = deps.key ?? getKey(provider);
   if (!key) throw new AiError('nokey', `No ${PROVIDERS[provider].label} API key yet. Add one in Settings → AI photo import.`);
   const online = deps.online ?? (typeof navigator === 'undefined' ? true : navigator.onLine !== false);
@@ -122,14 +133,15 @@ async function importBoardPhoto(imageDataUrl, settings, deps = {}) {
   const f = deps.fetch || globalThis.fetch;
   const status = deps.onStatus || (() => {});
   const timeoutMs = deps.timeoutMs ?? AI_TIMEOUT_MS;
-  const send = async opts => {
+  const deadline = Date.now() + timeoutMs;
+  const send = async (opts, msg) => {
     const { url, init } = buildRequest(provider, model, key, b64, opts);
     const ctl = new AbortController(); let timedOut = false;
     const outer = deps.signal; const onAbort = () => ctl.abort();
     if (outer) { if (outer.aborted) ctl.abort(); else outer.addEventListener('abort', onAbort, { once: true }); }
-    const timer = setTimeout(() => { timedOut = true; ctl.abort(); }, timeoutMs);
+    const timer = setTimeout(() => { timedOut = true; ctl.abort(); }, Math.max(0, deadline - Date.now()));
     const kb = Math.round(b64.length * 0.75 / 1024);
-    status(`Sending photo (${kb} KB) to ${PROVIDERS[provider].label} – ${model}…`);
+    status(msg || `Sending photo (${kb} KB) to ${PROVIDERS[provider].label} – ${model}…`);
     const t0 = Date.now(); let aborted;
     try {
       let res;
@@ -146,9 +158,24 @@ async function importBoardPhoto(imageDataUrl, settings, deps = {}) {
       return { res, data, raw };
     } finally { clearTimeout(timer); outer?.removeEventListener?.('abort', onAbort); }
   };
-  let { res, data, raw } = await send({});
-  if (provider === 'gemini' && res.status === 400 && /thinking/i.test(raw)) ({ res, data, raw } = await send({ noThinking: true }));
-  if (!res.ok) throw httpError(provider, res.status, data, raw);
+  const sleep = ms => new Promise((ok, bad) => {
+    if (Date.now() + ms >= deadline) return bad(new AiError('timeout', `${PROVIDERS[provider].label} is too busy right now – gave up after ${Math.round(timeoutMs / 1000)} s. Try again in a few minutes.`, `busy/overloaded until deadline; tried ${tried.join(', ')}`));
+    const t = setTimeout(ok, ms); deps.signal?.addEventListener('abort', () => { clearTimeout(t); bad(new AiError('cancel', 'Cancelled.')); }, { once: true });
+  });
+  const tried = []; let res, data, raw;
+  outer: for (let mi = 0; mi < models.length; mi++) {
+    model = models[mi]; let noThinking = false;
+    for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt++) {
+      if (deps.signal?.aborted) throw new AiError('cancel', 'Cancelled.');
+      tried.push(`${model}#${attempt + 1}`);
+      const msg = attempt ? `Google busy, retrying… (${model}, attempt ${attempt + 1})` : mi ? `Trying backup model ${model}…` : undefined;
+      ({ res, data, raw } = await send({ noThinking }, provider === 'gemini' ? msg : undefined));
+      if (provider === 'gemini' && res.status === 400 && /thinking/i.test(raw) && !noThinking) { noThinking = true; ({ res, data, raw } = await send({ noThinking })); }
+      if (res.ok || !RETRYABLE.includes(res.status)) break outer;
+      if (attempt < RETRY_DELAYS.length) { status(`Google busy, retrying in ${RETRY_DELAYS[attempt] / 1000} s… (${model})`); await sleep(RETRY_DELAYS[attempt] * (deps.delayScale ?? 1)); }
+    }
+  }
+  if (!res.ok) { const e = httpError(provider, res.status, data, raw); e.detail += ` · tried ${tried.join(', ')}`; throw e; }
   status('Checking the answer…');
   let text;
   try { text = replyText(provider, data); } catch (e) { e.detail ||= raw.slice(0, 600); throw e; }

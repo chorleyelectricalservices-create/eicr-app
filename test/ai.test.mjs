@@ -49,7 +49,7 @@ test('errors: no key, offline, network, bad key, quota, bad JSON, empty', async 
   await assert.rejects(ai.importBoardPhoto(IMG, S, { key: 'k', online: false }), e => e.code === 'offline');
   await assert.rejects(ai.importBoardPhoto(IMG, S, { key: 'k', online: true, fetch: async () => { throw new TypeError('Failed to fetch'); } }), e => e.code === 'offline');
   await assert.rejects(ai.importBoardPhoto(IMG, S, { key: 'k', online: true, fetch: okFetch({ error: { message: 'API key not valid' } }, 400) }), e => e.code === 'key');
-  await assert.rejects(ai.importBoardPhoto(IMG, S, { key: 'k', online: true, fetch: okFetch({}, 429) }), e => e.code === 'quota');
+  await assert.rejects(ai.importBoardPhoto(IMG, S, { key: 'k', online: true, fetch: okFetch({}, 429), delayScale: 0.001 }), e => e.code === 'quota');
   await assert.rejects(ai.importBoardPhoto(IMG, S, { key: 'k', online: true, fetch: okFetch({}, 404) }), e => e.code === 'model');
   await assert.rejects(ai.importBoardPhoto(IMG, S, { key: 'k', online: true, fetch: okFetch({ candidates: [{ content: { parts: [{ text: 'sorry I cannot' }] } }] }) }), e => e.code === 'bad');
   await assert.rejects(ai.importBoardPhoto(IMG, S, { key: 'k', online: true, fetch: okFetch(gemReply({ board: {}, circuits: [] })) }), e => e.code === 'empty');
@@ -95,5 +95,36 @@ test('status steps + low thinking, retry without thinking if rejected', async ()
   assert.ok(steps.some(s => /^Sending/.test(s)) && steps.some(s => /^Waiting/.test(s)));
 });
 test('error detail carries raw server message', async () => {
-  await assert.rejects(ai.importBoardPhoto(IMG, S, { key: 'k', online: true, fetch: okFetch({ error: { message: 'boom' } }, 500) }), e => e.code === 'http' && /HTTP 500/.test(e.detail) && /boom/.test(e.detail));
+  await assert.rejects(ai.importBoardPhoto(IMG, S, { key: 'k', online: true, fetch: okFetch({ error: { message: 'boom' } }, 418) }), e => e.code === 'http' && /HTTP 418/.test(e.detail) && /boom/.test(e.detail));
+});
+
+const seq = list => { const calls = []; const f = async (u, i) => { calls.push(u.match(/models\/([^:]+)/)[1]); const r = list.shift() ?? 503; return r === 200
+  ? { ok: true, status: 200, text: async () => JSON.stringify(gemReply(MODEL_JSON)) } : { ok: false, status: r, text: async () => JSON.stringify({ error: { message: 'This model is currently experiencing high demand' } }) }; }; f.calls = calls; return f; };
+test('503 retries with backoff then succeeds on same model', async () => {
+  const f = seq([503, 503, 200]); const st = [];
+  const r = await ai.importBoardPhoto(IMG, S, { key: 'k', online: true, fetch: f, delayScale: 0.001, onStatus: x => st.push(x) });
+  assert.deepEqual(f.calls, ['gemini-3.8-flash', 'gemini-3.8-flash', 'gemini-3.8-flash']); assert.equal(r.model, 'gemini-3.8-flash');
+  assert.ok(st.some(x => /Google busy, retrying/.test(x)));
+});
+test('falls back through model chain', async () => {
+  const f = seq([503, 429, 500, 200]); const st = [];
+  const r = await ai.importBoardPhoto(IMG, S, { key: 'k', online: true, fetch: f, delayScale: 0.001, onStatus: x => st.push(x) });
+  assert.deepEqual(f.calls, ['gemini-3.8-flash', 'gemini-3.8-flash', 'gemini-3.8-flash', 'gemini-3.6-flash']); assert.equal(r.model, 'gemini-3.6-flash');
+  assert.ok(st.some(x => /Trying backup model gemini-3.6-flash/.test(x)));
+});
+test('all busy -> clear busy error listing what was tried', async () => {
+  const f = seq([]);
+  await assert.rejects(ai.importBoardPhoto(IMG, S, { key: 'k', online: true, fetch: f, delayScale: 0.001 }), e => e.code === 'busy' && /gemini-3.5-flash-lite#3/.test(e.detail));
+  assert.equal(f.calls.length, 9);
+});
+test('user-set model: retries but no fallback; non-retryable errors stop at once', async () => {
+  const f = seq([]);
+  await assert.rejects(ai.importBoardPhoto(IMG, { ai: { provider: 'gemini', model: 'my-model' } }, { key: 'k', online: true, fetch: f, delayScale: 0.001 }), e => e.code === 'busy');
+  assert.deepEqual(f.calls, ['my-model', 'my-model', 'my-model']);
+  const g = seq([404]); await assert.rejects(ai.importBoardPhoto(IMG, S, { key: 'k', online: true, fetch: g }), e => e.code === 'model'); assert.equal(g.calls.length, 1);
+});
+test('backoff respects overall deadline and cancel', async () => {
+  await assert.rejects(ai.importBoardPhoto(IMG, S, { key: 'k', online: true, fetch: seq([]), timeoutMs: 1000 }), e => e.code === 'timeout' && /busy/.test(e.message));
+  const ctl = new AbortController(); setTimeout(() => ctl.abort(), 30);
+  await assert.rejects(ai.importBoardPhoto(IMG, S, { key: 'k', online: true, fetch: seq([]), signal: ctl.signal }), e => e.code === 'cancel');
 });
