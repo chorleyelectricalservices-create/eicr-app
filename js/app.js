@@ -442,7 +442,7 @@ function renderBoards() {
     ${fld(`boards.${currentBoard}.polarityOk`, 'Correct polarity confirmed', { type: 'check' })}${fld(`boards.${currentBoard}.phaseSeqOk`, 'Phase sequence confirmed (3-phase)', { type: 'check' })}${fld(`boards.${currentBoard}.spdOk`, 'SPD operational status confirmed', { type: 'check' })}
     <div class="btns"><button class="btn" id="zdbZe">Zdb/Ipf = origin (Ze, Ipf)</button><button class="btn danger" id="delB">Delete board</button></div></details>
   <div class="card"><h2>Circuits (${b.circuits.length})</h2>
-    <div class="btns"><button class="btn pri" id="dictate" style="font-size:17px">🎤 Dictate results</button><label class="btn" id="aiPhoto" style="font-size:17px;display:inline-flex;align-items:center">📷 Photo of board<input type="file" id="aiFile" accept="image/*" capture="environment" hidden></label>${voiceUndo.length ? '<button class="btn" id="undoDict">↶ Undo last dictation/fill</button>' : ''}</div>
+    <div class="btns"><button class="btn pri" id="dictate" style="font-size:17px">🎤 Dictate results</button><label class="btn" id="aiPhoto" style="font-size:17px;display:inline-flex;align-items:center">📷 Take photo<input type="file" id="aiFile" accept="image/*" capture="environment" hidden></label><label class="btn" id="aiGallery" style="font-size:17px;display:inline-flex;align-items:center">🖼️ Choose from gallery<input type="file" id="aiFileGal" accept="image/*" hidden></label>${voiceUndo.length ? '<button class="btn" id="undoDict">↶ Undo last dictation/fill</button>' : ''}</div>
     <div class="muted">Quick add:</div><div class="fillbar">${QUICK_CIRCUITS.map((q, i) => `<button class="btn" data-q="${i}">＋ ${esc(q.name)}</button>`).join('')}<button class="btn" data-q="-1">＋ Blank</button></div>
     <div class="muted">Fill all rows:</div><div class="fillbar"><button class="btn" data-fill="polarity">Polarity ✓</button><button class="btn" data-fill="testV">IR 500 V</button><button class="btn" data-fill="ir">IR &gt;999</button><button class="btn" data-fill="rcdBtn">RCD btn ✓</button><button class="btn" data-fill="afddBtn">AFDD N/A</button><button class="btn" data-fill="bc">kA 6</button></div>
     <div class="tbl-wrap"><table class="ct"><thead>
@@ -468,7 +468,7 @@ function renderBoards() {
     if (['bsen', 'type', 'rating', 'maxDisc'].includes(k)) { const m = tableMaxZs(c.bsen, c.type, c.rating, c.maxDisc); tr.querySelector('[data-c="maxZs"]').placeholder = m ?? '?'; }
     scheduleSave(); markRow(tr, c, b);
   });
-  $('#aiFile') && ($('#aiFile').onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) boardPhotoFlow(f, b); });
+  for (const id of ['#aiFile', '#aiFileGal']) $(id) && ($(id).onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) boardPhotoFlow(f, b); });
   main.addEventListener('click', e => {
     const t = e.target.closest('button'); if (!t) return;
     if (t.dataset.b != null) { currentBoard = +t.dataset.b; renderBoards(); return; }
@@ -544,7 +544,7 @@ function markRow(tr, c, b) {
 function markRows(b) { main.querySelectorAll('table.ct tbody tr').forEach(tr => markRow(tr, b.circuits[+tr.dataset.r], b)); }
 
 // ---------- AI board photo import ----------
-const APP_VERSION = '1.5.2';
+const APP_VERSION = '1.5.3';
 const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`${what} timed out after ${ms / 1000} s`)), ms))]);
 function drawToJpeg(src, w, h, max, q) {
   const s = Math.min(1, max / Math.max(w, h)); const cv = document.createElement('canvas');
