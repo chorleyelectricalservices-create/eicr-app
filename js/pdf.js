@@ -240,10 +240,11 @@ export function buildReport(jsPDF, job, settings) {
     const fs = 6.3;
     table({
       head: [['No', 'Circuit description', 'Wiring', 'Ref', 'Pts', 'Live mm²', 'cpc mm²', 'Max disc s', 'OCPD BS (EN)', 'Type', 'A', 'kA', 'RCD BS (EN)', 'RCD type', 'IΔn mA', 'RCD A', 'Max Zs Ω']],
-      body: cs.map(c => { const mz = circuitMaxZs(c); return [c.no, c.desc, c.wiring, c.refMethod, c.points, c.live, c.cpc, c.maxDisc, c.bsen, c.type, c.rating, c.bc, c.rcdBsen, c.rcdType, c.idn, c.rcdRating, mz != null ? String(mz) : '']; }),
+      body: cs.map(c => { const mz = circuitMaxZs(c); const T = k => c[k] && c.typ?.[k] ? `${c[k]}†` : c[k]; return [c.no, c.desc, T('wiring'), T('refMethod'), c.points, T('live'), T('cpc'), c.maxDisc, c.bsen, c.type, c.rating, c.bc, c.rcdBsen, c.rcdType, c.idn, c.rcdRating, mz != null ? String(mz) : '']; }),
       styles: { fontSize: fs, cellPadding: 0.8, halign: 'center' }, headStyles: { fontSize: 6, halign: 'center', valign: 'middle' },
       columnStyles: { 1: { halign: 'left', cellWidth: 52 }, 0: { cellWidth: 9 } },
     });
+    if (cs.some(c => c.typ && Object.keys(c.typ).length)) note('† Typical value for a domestic installation, assumed (not verified by inspection).', 6.5);
     note(`Wiring codes: ${Object.entries(WIRING_TYPES).map(([k, v]) => `${k} ${v}`).join(' · ')}. Max Zs from BS 7671 Chapter 41 tables unless stated.`, 6);
     table({
       head: [['No', 'r1', 'rn', 'r2', 'R1+R2', 'R2', 'IR V', 'IR L-L MΩ', 'IR L-E MΩ', 'Polarity', 'Zs Ω', 'RCD ms', 'RCD 5× ms', 'RCD btn', 'AFDD btn', 'Remarks']],

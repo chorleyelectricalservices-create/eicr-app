@@ -109,3 +109,5 @@ table.ct [data-imp]{background:#eef6ff;border-color:#3b82f6}
 table.imprev input.unread{background:#fff7ed;border-color:#f39200}
 .conf-low{color:#b91c1c;font-weight:700}.conf-medium{color:#c2410c}.conf-high{color:#15803d}
 b.warn{color:#c2410c}
+table.ct [data-typ]{background:#f0fdf4;border-color:#16a34a}
+.typtag{position:absolute;left:3px;top:-1px;font-size:9px;font-weight:700;color:#15803d;background:#fff;padding:0 2px;border-radius:3px}

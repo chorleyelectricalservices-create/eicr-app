@@ -5,6 +5,7 @@ import { validateJob, overallAssessment, checkCircuit, circuitMaxZs, codeCounts,
 import { tableMaxZs } from './zs.js';
 import { buildReport } from './pdf.js';
 import { sampleJob } from './sample.js';
+import { planDomestic, markTyp, DEFAULT_RULES_TEXT } from './domestic.js';
 import { ai, AI_TIMEOUT_MS, aiCfg, PROVIDERS, getKey, setKey, planImport, markImported, boardPlan } from './ai.js';
 import { parseDictation, FIELD_LABELS } from './voice.js';
 import { boardZe, calcR1R2, calcZs, planCalcAll, markCalc } from './calc.js';
@@ -415,7 +416,7 @@ const COLS = [
   ['polarity', 'Pol', 'cyc'], ['zs', 'Zs Ω', 'num', 'w2', 'Tests'], ['rcdTime', 'RCD ms', 'num', 'w2'], ['rcd5x', '5× ms', 'num', 'w2'], ['rcdBtn', 'RCD btn', 'cyc'], ['afddBtn', 'AFDD btn', 'cyc'],
   ['remarks', 'Remarks', 'text', 'w5'],
 ];
-function cell(c, col, ci) { const h = cell0(c, col, ci); return c.imp?.[col[0]] ? `<div class="impwrap">${h.replace(/^<(input|select)/, '<$1 data-imp="1"')}<span class="imptag">AI</span></div>` : h; }
+function cell(c, col, ci) { const h = cell0(c, col, ci); if (c.typ?.[col[0]]) return `<div class="impwrap">${h.replace(/^<(input|select)/, '<$1 data-typ="1"')}<span class="typtag">typ</span></div>`; return c.imp?.[col[0]] ? `<div class="impwrap">${h.replace(/^<(input|select)/, '<$1 data-imp="1"')}<span class="imptag">AI</span></div>` : h; }
 function cell0(c, [k, , kind, opt], ci) {
   const v = c[k] ?? '';
   if (kind === 'sel') return `<select data-c="${k}">${opt.map(o => `<option${String(v) === o ? ' selected' : ''}>${o}</option>`).join('')}${opt.includes(String(v)) ? '' : `<option selected>${esc(v)}</option>`}</select>`;
@@ -444,7 +445,7 @@ function renderBoards() {
   <div class="card"><h2>Circuits (${b.circuits.length})</h2>
     <div class="btns"><button class="btn pri" id="dictate" style="font-size:17px">🎤 Dictate results</button><label class="btn" id="aiPhoto" style="font-size:17px;display:inline-flex;align-items:center">📷 Take photo<input type="file" id="aiFile" accept="image/*" capture="environment" hidden></label><label class="btn" id="aiGallery" style="font-size:17px;display:inline-flex;align-items:center">🖼️ Choose from gallery<input type="file" id="aiFileGal" accept="image/*" hidden></label>${voiceUndo.length ? '<button class="btn" id="undoDict">↶ Undo last dictation/fill</button>' : ''}</div>
     <div class="muted">Quick add:</div><div class="fillbar">${QUICK_CIRCUITS.map((q, i) => `<button class="btn" data-q="${i}">＋ ${esc(q.name)}</button>`).join('')}<button class="btn" data-q="-1">＋ Blank</button></div>
-    <div class="muted">Fill all rows:</div><div class="fillbar"><button class="btn" data-fill="polarity">Polarity ✓</button><button class="btn" data-fill="testV">IR 500 V</button><button class="btn" data-fill="ir">IR &gt;999</button><button class="btn" data-fill="rcdBtn">RCD btn ✓</button><button class="btn" data-fill="afddBtn">AFDD N/A</button><button class="btn" data-fill="bc">kA 6</button></div>
+    <div class="muted">Fill all rows:</div><div class="fillbar"><button class="btn" data-fill="polarity">Polarity ✓</button><button class="btn" data-fill="testV">IR 500 V</button><button class="btn" data-fill="ir">IR &gt;999</button><button class="btn" data-fill="rcdBtn">RCD btn ✓</button><button class="btn" data-fill="afddBtn">AFDD N/A</button><button class="btn" data-fill="bc">kA 6</button><button class="btn" id="domDef">🏠 Domestic defaults</button></div>
     <div class="tbl-wrap"><table class="ct"><thead>
       <tr><th>No</th>${COLS.map(c => `<th>${c[1]}${c[2] === 'mz' ? '' : `<br><button class="fillcol" data-fillcol="${c[0]}" aria-label="Fill ${esc(c[1])} column">⬇</button>`}</th>`).join('')}</tr></thead>
       <tbody>${b.circuits.map((c, i) => `<tr data-r="${i}"><td class="no"><input data-c="no" inputmode="numeric" value="${esc(c.no)}"><button class="rowbtn" data-act="${i}" aria-label="Row actions">⋮</button></td>${COLS.map((col, ci) => `<td${col[2] === 'mz' ? ' class="mzc"' : ''}>${cell(c, col, ci)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
@@ -462,6 +463,7 @@ function renderBoards() {
     const el = e.target; const k = el.dataset.c; if (!k) return; e.stopPropagation();
     const tr = el.closest('tr'); const c = b.circuits[+tr.dataset.r];
     if (k === 'maxZs') { c.maxZs = el.value; c.maxZsManual = el.value.trim() !== ''; } else c[k] = el.value;
+    if (c.typ?.[k]) { markTyp(c, k, false); el.removeAttribute('data-typ'); el.parentElement.querySelector('.typtag')?.remove(); }
     if (c.imp?.[k]) { markImported(c, k, false); el.removeAttribute('data-imp'); el.parentElement.querySelector('.imptag')?.remove(); }
     if (c.calc?.[k]) { markCalc(c, k, false); el.classList.remove('calcd'); el.parentElement.querySelector('.calctag')?.remove(); }
     if (k === 'desc' && /ring/i.test(el.value)) c.ring = true;
@@ -535,6 +537,7 @@ function renderBoards() {
     if (t.id === 'instLoad') { job.instruments = { ...settings.instruments }; scheduleSave(); renderBoards(); }
     if (t.id === 'dictate') { startDictation(); return; }
     if (t.id === 'undoDict') { undoDictation(); return; }
+    if (t.id === 'domDef') { applyDomestic(b, null); return; }
   });
 }
 function markRow(tr, c, b) {
@@ -544,7 +547,7 @@ function markRow(tr, c, b) {
 function markRows(b) { main.querySelectorAll('table.ct tbody tr').forEach(tr => markRow(tr, b.circuits[+tr.dataset.r], b)); }
 
 // ---------- AI board photo import ----------
-const APP_VERSION = '1.5.3';
+const APP_VERSION = '1.6.0';
 const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`${what} timed out after ${ms / 1000} s`)), ms))]);
 function drawToJpeg(src, w, h, max, q) {
   const s = Math.min(1, max / Math.max(w, h)); const cv = document.createElement('canvas');
@@ -633,9 +636,28 @@ function reviewImport(res, img, b) {
     }
     b.circuits.sort((x, y) => (parseInt(x.no) || 999) - (parseInt(y.no) || 999));
     const bs = boardPlan(b, bi); Object.assign(b, bs);
+    const touched = plan.map(p => b.circuits.findIndex(c => String(c.no) === String(p.no))).filter(i => i >= 0);
     closeModal(); scheduleSave(); renderBoards();
+    setTimeout(() => askDomestic(b, touched), 300);
     toast(`${added} circuits added, ${upd} updated${Object.keys(bs).length ? ', board RCD filled' : ''}. AI values are tagged until you edit them.`, 4000);
   };
+}
+
+// ---------- domestic defaults ----------
+function askDomestic(b, idx) {
+  if (!idx.length) return;
+  modal(`<h2>Is this a domestic installation?</h2><p>If yes, I’ll fill typical UK domestic values – wiring type, reference method, live/cpc sizes – into <b>empty</b> boxes of the ${idx.length} imported circuit${idx.length === 1 ? '' : 's'}. Nothing you’ve entered is changed, spares and unknown circuits are skipped, and filled values are tagged <span class="typtag" style="position:static">typ</span> until you check/edit them.</p><div class="btns"><button class="btn" id="domNo">No</button><button class="btn pri" id="domYes">Yes – fill typical values</button></div>`);
+  $('#domNo').onclick = closeModal; $('#domYes').onclick = () => { closeModal(); applyDomestic(b, idx); };
+}
+function applyDomestic(b, idx) {
+  const { plan, unknown, spare } = planDomestic(b.circuits, settings.domesticRules || DEFAULT_RULES_TEXT, idx);
+  if (!plan.length) return toast(`Nothing to fill${unknown ? ` – ${unknown} circuit type(s) not recognised or already different` : ''}${spare ? `, ${spare} spare` : ''}. Rules are in Settings → Domestic defaults.`, 5000);
+  const undo = [];
+  for (const p of plan) { const c = b.circuits[p.index]; undo.push({ obj: c, k: 'typ', old: c.typ ? { ...c.typ } : undefined });
+    for (const [k, v] of Object.entries(p.set)) { undo.push({ obj: c, k, old: c[k] }); c[k] = v; markTyp(c, k, true); } }
+  voiceUndo.push(undo); if (voiceUndo.length > 20) voiceUndo.shift();
+  scheduleSave(); renderBoards();
+  toast(`Typical values filled on ${plan.length} circuit${plan.length === 1 ? '' : 's'}${unknown ? `, ${unknown} not recognised (left blank)` : ''}. Check them!`, 7000, { label: 'Undo', fn: undoDictation });
 }
 
 // ---------- settings ----------
@@ -659,6 +681,10 @@ function renderSettings() {
     <label class="f"><span>${PROVIDERS[aiCfg(settings).provider].label} API key</span><input id="aiKey" type="password" autocomplete="off" placeholder="paste key" value="${esc(getKey(aiCfg(settings).provider))}"></label>
     <p class="muted"><a href="${PROVIDERS[aiCfg(settings).provider].keyUrl}" target="_blank" rel="noopener">Get a key ↗</a>${aiCfg(settings).provider === 'gemini' ? ' (free – sign in with Google, tap “Create API key”)' : ' (paid account)'}</p>
     <label class="f"><span>Model (blank = ${PROVIDERS[aiCfg(settings).provider].defaultModel})</span><input id="aiModel" placeholder="${PROVIDERS[aiCfg(settings).provider].defaultModel}" value="${esc(settings.ai?.model || '')}"></label></div>
+  <div class="card"><h2>Domestic defaults</h2>
+    <p class="muted">Used by “🏠 Domestic defaults” and after photo import. Only fills empty boxes. One rule per line, first match wins:<br><code>words in description | ratings A (e.g. 6 or 40-50) | live/cpc mm² | wiring code | ref method</code><br>Max Zs is filled automatically from the BS 7671 tables from device type/curve/rating.</p>
+    <textarea id="domTxt" style="min-height:220px;font-size:13px;font-family:monospace">${esc(settings.domesticRules || DEFAULT_RULES_TEXT)}</textarea>
+    <div class="btns"><button class="btn pri" id="domSave">Save rules</button><button class="btn" id="domReset">Reset to built-in</button></div></div>
   <div class="card"><h2>Reports</h2><div class="row">${fld('reportPrefix', 'Report no. prefix', { obj: settings, scope: 'settings' })}${fld('nextNumber', 'Next number', { obj: settings, scope: 'settings', type: 'num' })}</div>
     ${fld('defaultInterval', 'Default next inspection (years)', { obj: settings, scope: 'settings', type: 'seg', options: ['1', '3', '5', '10'] })}
     ${fld('zsRuleOfThumb', 'Check measured Zs against 0.8 × tabulated max (rule of thumb)', { obj: settings, scope: 'settings', type: 'check' })}</div>
@@ -678,6 +704,8 @@ function renderSettings() {
     settings.obsLibrary = $('#libTxt').value.split('\n').map(l => l.split('|').map(s => s.trim())).filter(p => p.length >= 3 && p[2]).map(([code, reg, desc, items]) => ({ code: code.toUpperCase(), reg, desc, items: items ? items.split(/[ ,]+/).filter(x => INSPECTION_ITEMS.some(i => i.id === x)) : suggestItems(desc, reg, 1) }));
     await saveSettings(); toast(`Saved ${settings.obsLibrary.length} entries`);
   };
+  $('#domSave').onclick = async () => { const v = $('#domTxt').value.trim(); settings.domesticRules = v === DEFAULT_RULES_TEXT ? null : v; await saveSettings(); toast('Domestic rules saved'); };
+  $('#domReset').onclick = async () => { settings.domesticRules = null; await saveSettings(); const y = scrollY; renderSettings(); scrollTo(0, y); };
   $('#libReset').onclick = async () => { settings.obsLibrary = null; await saveSettings(); renderSettings(); };
   $('#sample').onclick = async () => { const j = sampleJob(settings); j.id = uid(); await db.putJob(j); location.hash = `#/job/${j.id}/check`; };
 }
