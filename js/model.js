@@ -41,7 +41,7 @@ export function newJob(settings = defaultSettings()) {
   const s = settings;
   const d = today();
   return {
-    id: uid(), created: Date.now(), updated: Date.now(), status: 'draft', edition: DEFAULT_EDITION,
+    id: uid(), created: Date.now(), updated: Date.now(), status: 'draft', kind: 'eicr', edition: DEFAULT_EDITION,
     reportNo: `${s.reportPrefix || ''}${String(s.nextNumber || 1).padStart(4, '0')}`,
     client: { name: '', address: '' },
     reason: '', inspDates: d,
@@ -67,4 +67,36 @@ export function newJob(settings = defaultSettings()) {
     instruments: { ...(s.instruments || {}) },
     photos: [], // reserved: {id, dataUrl, obsId} – future photo evidence / AI import
   };
+}
+
+export function newEic(settings = defaultSettings()) {
+  const j = newJob(settings);
+  j.kind = 'eic';
+  j.eic = {
+    installType: 'New installation', // New installation | Addition | Alteration
+    description: '',
+    departures: '', exceptions: '', riskAssessment: false,
+    commentsExisting: '',
+    singleSignature: true, // A4 allows one person to sign for design+construction+I&T
+    design: { name: '', date: today(), departures: '' },
+    design2: { name: '', date: '', departures: '' },
+    construction: { name: '', date: today(), departures: '' },
+    inspection: { name: '', date: today(), departures: '' },
+  };
+  j.reason = ''; // unused
+  return j;
+}
+export function newMw(settings = defaultSettings()) {
+  const j = newJob(settings);
+  j.kind = 'mw';
+  j.boards = [newBoard('CU1')];
+  j.mw = {
+    description: '', completed: today(),
+    departures: '', exceptions: '', riskAssessment: false,
+    commentsExisting: '',
+    earthingOk: false, bonding: { water: '', gas: '', oil: '', steel: '', other: '', otherSpec: '' },
+  };
+  // one blank circuit ready
+  j.boards[0].circuits = [newCircuit(1)];
+  return j;
 }

@@ -1,6 +1,7 @@
 import { db } from './db.js';
-import { newJob, newBoard, newCircuit, defaultSettings, uid, addYears, today } from './model.js';
-import { EDITIONS, INSPECTION_GROUPS, INSPECTION_ITEMS, DOMESTIC_TEMPLATE, OBS_LIBRARY, QUICK_CIRCUITS, WIRING_TYPES, CODES } from './presets.js';
+import { newJob, newEic, newMw, newBoard, newCircuit, defaultSettings, uid, addYears, today } from './model.js';
+import { KINDS, kindOf, kindMeta } from './kinds.js';
+import { EDITIONS, INSPECTION_GROUPS, INSPECTION_ITEMS, DOMESTIC_TEMPLATE, OBS_LIBRARY, QUICK_CIRCUITS, WIRING_TYPES, CODES, EIC_ITEMS } from './presets.js';
 import { validateJob, overallAssessment, checkCircuit, circuitMaxZs, codeCounts, sortObservations, summariseIssues } from './validate.js';
 import { tableMaxZs } from './zs.js';
 import { buildReport } from './pdf.js';
@@ -84,10 +85,8 @@ function bindFields(root, obj, onChange) {
 }
 
 // ---------- routing ----------
-const TABS = [
-  ['client', 'Client & site'], ['extent', 'Extent'], ['supply', 'Supply & origin'], ['inspection', 'Inspection'],
-  ['boards', 'Circuits'], ['observations', 'Observations'], ['summary', 'Summary & sign'], ['check', 'Check & PDF'],
-];
+const TAB_LABELS = { client: 'Client & site', extent: 'Extent', supply: 'Supply & origin', inspection: 'Inspection', boards: 'Circuits', observations: 'Observations', summary: 'Summary & sign', check: 'Check & PDF' };
+const TABS_FOR = j => (kindMeta(j).tabs || []).map(k => [k, TAB_LABELS[k] || k]);
 async function route() {
   const h = location.hash.slice(1) || '/';
   const parts = h.split('/').filter(Boolean);
@@ -97,6 +96,7 @@ async function route() {
     if (!job) { location.hash = '#/'; return; }
     migrate(job); recalcSchedule(job);
     const tab = parts[2] || 'client';
+    const tabs = TABS_FOR(job); if (!tabs.some(([k]) => k === tab)) { location.hash = `#/job/${job.id}/${tabs[0][0]}`; return; }
     renderTabs(tab); $('#backBtn').hidden = false; refreshHeader(); currentTab = tab;
     $('#micFab').hidden = !['boards', 'supply'].includes(tab);
     main.innerHTML = ''; window.scrollTo(0, 0);
@@ -107,7 +107,7 @@ async function route() {
     renderSettings();
   } else {
     if (job) { await db.putJob(job); job = null; }
-    $('#topTitle').textContent = 'EICR Pad'; $('#topSub').textContent = 'Condition reports'; saved('');
+    $('#topTitle').textContent = 'Cert Pad'; $('#topSub').textContent = 'EICR · EIC · Minor Works'; saved('');
     renderJobs();
   }
 }
@@ -119,13 +119,14 @@ function renderTabs(active) {
   const nav = $('#tabs'); nav.hidden = false;
   const iss = validateJob(job, settings);
   const by = {}; iss.filter(i => i.level === 'error').forEach(i => (by[i.target] = (by[i.target] || 0) + 1));
-  nav.innerHTML = TABS.map(([k, l]) => `<a href="#/job/${job.id}/${k}" class="${k === active ? 'on' : ''}">${l}${k === 'check' && iss.filter(i => i.level === 'error').length ? `<span class="dot">${iss.filter(i => i.level === 'error').length}</span>` : ''}</a>`).join('');
+  nav.innerHTML = TABS_FOR(job).map(([k, l]) => `<a href="#/job/${job.id}/${k}" class="${k === active ? 'on' : ''}">${l}${k === 'check' && iss.filter(i => i.level === 'error').length ? `<span class="dot">${iss.filter(i => i.level === 'error').length}</span>` : ''}</a>`).join('');
   nav.querySelector('.on')?.scrollIntoView({ inline: 'center', block: 'nearest' });
 }
 function refreshHeader() {
   if (!job) return;
-  $('#topTitle').textContent = job.reportNo || 'EICR';
-  $('#topSub').textContent = [job.installation?.address, overallAssessment(job)].filter(Boolean).join(' · ');
+  $('#topTitle').textContent = job.reportNo || kindMeta(job).label;
+  const sub = kindOf(job) === 'eicr' ? overallAssessment(job) : kindMeta(job).full;
+  $('#topSub').textContent = [job.installation?.address, sub].filter(Boolean).join(' · ');
 }
 
 // ---------- jobs list ----------
@@ -143,7 +144,7 @@ async function renderJobs() {
     q = q.toLowerCase();
     const f = jobs.filter(j => !q || [j.reportNo, j.client?.name, j.installation?.address, j.installation?.occupier, j.inspDates].join(' ').toLowerCase().includes(q));
     list.innerHTML = f.length ? f.map(j => { const a = overallAssessment(j); return `<div class="card">
-      <a class="job" href="#/job/${j.id}/client"><div class="meta"><b style="color:var(--ink)">${esc(j.reportNo)}</b><span>${esc(j.inspDates || '')}</span></div>
+      <a class="job" href="#/job/${j.id}/client"><div class="meta"><b style="color:var(--ink)">${esc(j.reportNo)}</b><span>${esc(kindMeta(j).label)} · ${esc(j.inspDates || j.mw?.completed || '')}</span></div>
       <div style="font-weight:600;margin:4px 0">${esc(j.installation?.address || 'No address yet')}</div>
       <div class="meta"><span>${esc(j.client?.name || '')}</span><span><span class="badge ${j.status === 'issued' ? 'issued' : 'draft'}">${j.status === 'issued' ? 'Issued' : 'Draft'}</span> <span class="badge ${a === 'SATISFACTORY' ? 'ok' : 'bad'}">${a === 'SATISFACTORY' ? 'Sat' : 'Unsat'}</span></span></div></a>
       <div class="btns"><button class="btn" data-dup="${j.id}">⧉ Duplicate</button><button class="btn danger" data-del="${j.id}">🗑 Delete</button></div></div>`; }).join('')
@@ -151,13 +152,21 @@ async function renderJobs() {
   };
   draw('');
   $('#q').oninput = e => draw(e.target.value);
-  $('#new').onclick = async () => { const j = newJob(settings); const a = allocateRef(settings, await db.allJobs()); j.reportNo = a.ref; settings.nextNumber = a.next; await saveSettings(); await db.putJob(j); location.hash = `#/job/${j.id}/client`; };
+  $('#new').onclick = () => modal(`<h2>New certificate</h2><p class="muted">Choose the form that matches the work (BS 7671:2018+A4:2026).</p>
+    <div class="btns" style="flex-direction:column;align-items:stretch"><button class="btn pri" data-k="eicr">EICR – Condition Report</button>
+    <button class="btn" data-k="eic">EIC – Installation Certificate</button>
+    <button class="btn" data-k="mw">Minor Works Certificate</button>
+    <button class="btn" id="mclose">Cancel</button></div>
+    <p class="muted" style="margin-top:10px">Minor Works is only for additions/alterations that do <b>not</b> introduce a new circuit. A new circuit or consumer unit / distribution board replacement needs an EIC.</p>`);
+    $('#modalBody').onclick = async e => { const t = e.target.closest('[data-k]'); if (!t) return; closeModal();
+      const makers = { eicr: newJob, eic: newEic, mw: newMw }; const j = makers[t.dataset.k](settings);
+      const a = allocateRef(settings, await db.allJobs(), new Date(), KINDS[t.dataset.k].ref); j.reportNo = a.ref; settings.nextNumber = a.next; await saveSettings(); await db.putJob(j); location.hash = `#/job/${j.id}/client`; };
   list.onclick = async e => {
     const d = e.target.closest('[data-dup]'), x = e.target.closest('[data-del]');
     if (d) {
       const src = await db.getJob(d.dataset.dup); const j = structuredClone(src);
       j.id = uid(); j.created = j.updated = Date.now(); j.status = 'draft'; j.refLocked = false; j.pdfMade = 0;
-      { const a = allocateRef(settings, await db.allJobs()); j.reportNo = a.ref; settings.nextNumber = a.next; } await saveSettings();
+      { const a = allocateRef(settings, await db.allJobs(), new Date(), kindMeta(j).ref); j.reportNo = a.ref; settings.nextNumber = a.next; } await saveSettings();
       j.declaration.inspector.signature = ''; j.declaration.authoriser.signature = ''; j.inspDates = today();
       j.declaration.inspector.date = today(); j.declaration.authoriser.date = today();
       j.next.date = addYears(today(), j.next.intervalYears || 5);
@@ -187,15 +196,44 @@ async function renderJobs() {
 function downloadBlob(blob, name) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000); }
 
 // ---------- job views ----------
+function eicInspection() {
+  fresh();
+  job.eicInspection ??= {};
+  main.innerHTML = `<div class="card"><h2>Schedule of inspections (EIC)</h2>
+    <p class="muted">BS 7671:2018+A4:2026 Section H. Tick each relevant item; mark N/A where not applicable.</p>
+    <div class="btns"><button class="btn" id="eicAllTick">Mark all ✓</button><button class="btn" id="eicAllNa">Mark remaining N/A</button></div>
+    ${EIC_ITEMS.map(([id, t]) => `<label class="f"><span>${esc(id)} · ${esc(t)}</span>
+      <select data-ei="${id}">${['', '✓', 'N/A'].map(o => `<option${(job.eicInspection[id] || '') === o ? ' selected' : ''}>${o}</option>`).join('')}</select></label>`).join('')}</div>`;
+  main.querySelectorAll('[data-ei]').forEach(el => el.onchange = e => { job.eicInspection[e.target.dataset.ei] = e.target.value; scheduleSave(); });
+  $('#eicAllTick').onclick = () => { for (const [id] of EIC_ITEMS) job.eicInspection[id] = '✓'; scheduleSave(); eicInspection(); };
+  $('#eicAllNa').onclick = () => { for (const [id] of EIC_ITEMS) if (!job.eicInspection[id]) job.eicInspection[id] = 'N/A'; scheduleSave(); eicInspection(); };
+}
 const VIEWS = {
   client() {
     fresh();
     main.innerHTML = `
     <div class="card"><h2>Report</h2>${job.refLocked ? `<label class="f"><span>Report reference 🔒</span><input value="${esc(job.reportNo)}" readonly style="background:#f1f5f9"></label><p class="muted">Locked because a PDF has been made${job.status === 'issued' ? '/issued' : ''}. <button class="btn" id="chgRef">Change reference…</button></p>` : `<label class="f"><span>Report reference</span><input id="refIn" value="${esc(job.reportNo)}"></label>`}${fld('edition', 'Edition', { type: 'select', options: Object.entries(EDITIONS).map(([k, v]) => [k, v.label]) })}</div>
     <div class="card"><h2>A · Person ordering the report</h2>${fld('client.name', 'Name')}${fld('client.address', 'Address', { type: 'textarea' })}</div>
-    <div class="card"><h2>B · Reason for the report</h2>${fld('reason', 'Reason', { list: ['Periodic inspection', 'Change of tenancy', 'Landlord requirement (5-yearly)', 'Sale of property', 'Purchase survey', 'Mortgage / insurance requirement', 'Change of occupancy'] })}
-      ${fld('inspDates', 'Date(s) of inspection', { type: 'date' })}</div>
-    <div class="card"><h2>C · Installation</h2>${fld('installation.occupier', 'Occupier')}
+    ${kindOf(job) === 'eicr' ? `<div class="card"><h2>B · Reason for the report</h2>${fld('reason', 'Reason', { list: ['Periodic inspection', 'Change of tenancy', 'Landlord requirement (5-yearly)', 'Sale of property', 'Purchase survey', 'Mortgage / insurance requirement', 'Change of occupancy'] })}
+      ${fld('inspDates', 'Date(s) of inspection', { type: 'date' })}</div>` : ''}
+    ${kindOf(job) === 'eic' ? `<div class="card"><h2>B · Installation details (EIC)</h2>
+      ${fld('eic.installType', 'Type of work', { type: 'seg', options: ['New installation', 'Addition', 'Alteration'] })}
+      ${fld('eic.description', 'Description of installation', { type: 'textarea' })}
+      ${fld('extent.covered', 'Extent covered by this certificate', { type: 'textarea' })}
+      ${fld('eic.departures', 'Departures from BS 7671', { type: 'textarea' })}
+      ${fld('eic.exceptions', 'Permitted exceptions (411.3.3)', { type: 'textarea' })}
+      ${fld('eic.riskAssessment', 'Risk assessment attached', { type: 'check' })}
+      ${fld('eic.commentsExisting', 'Comments on existing installation (addition/alteration)', { type: 'textarea' })}
+      ${fld('next.intervalYears', 'Recommended first inspection (years)', { type: 'seg', options: ['1', '3', '5', '10'] })}</div>` : ''}
+    ${kindOf(job) === 'mw' ? `<div class="card"><h2>A · Description of the minor works</h2>
+      <p class="muted">Use Minor Works only when you have <b>not</b> introduced a new circuit. A new circuit, or replacing a consumer unit / distribution board, needs an <b>EIC</b>.</p>
+      ${fld('mw.completed', 'Date minor works completed', { type: 'date' })}
+      ${fld('mw.description', 'Description of the minor works', { type: 'textarea' })}
+      ${fld('mw.departures', 'Departures from BS 7671', { type: 'textarea' })}
+      ${fld('mw.exceptions', 'Permitted exceptions (411.3.3)', { type: 'textarea' })}
+      ${fld('mw.riskAssessment', 'Risk assessment attached', { type: 'check' })}
+      ${fld('mw.commentsExisting', 'Comments on existing installation (incl. defects observed)', { type: 'textarea' })}</div>` : ''}
+    <div class="card"><h2>${kindOf(job) === 'eicr' ? 'C · Installation' : 'Installation'}</h2>${kindOf(job) === 'eicr' ? fld('installation.occupier', 'Occupier') : ''}
       ${fld('installation.address', 'Installation address', { type: 'textarea' })}
       <button class="btn" id="sameAddr">Same as client address</button><br><br>
       ${fld('installation.premises', 'Description of premises', { type: 'seg', options: ['Residential', 'Commercial', 'Industrial', 'Other'] })}
@@ -258,6 +296,7 @@ const VIEWS = {
     bindFields(main, job);
   },
   inspection() {
+    if (kindOf(job) === 'eic') return eicInspection();
     fresh();
     const insp = job.inspection;
     const outs = id => (id.startsWith('1.') ? ['✓', 'X', 'N/A', 'LIM', 'N/V', 'C1'] : ['✓', 'N/A', 'LIM', 'N/V', 'C1', 'C2', 'C3', 'FI']);
@@ -351,6 +390,33 @@ const VIEWS = {
     fresh();
     const a = overallAssessment(job); const cc = codeCounts(job);
     const d = job.declaration;
+    if (kindOf(job) === 'eic') {
+      job.eic ??= {};
+      const e = job.eic;
+      const sigImgE = d.inspector.useSaved && settings.inspector.signature ? settings.inspector.signature : d.inspector.signature;
+      main.innerHTML = `<div class="card"><h2>Certification (EIC)</h2>
+        ${fld('eic.singleSignature', 'Single-signature certificate (one person did design, construction, and I&T)', { type: 'check' })}
+        <p class="muted">A4:2026 allows one authorised person to sign for all three categories when they carried out all of that work.</p>
+        ${e.singleSignature ? `${fld('eic.inspection.name', 'Name (capitals)')}${fld('eic.inspection.date', 'Date', { type: 'date' })}${fld('eic.departures', 'Departures from BS 7671', { type: 'textarea' })}`
+          : `<h3>Design</h3>${fld('eic.design.name', 'Designer 1 name')}${fld('eic.design.date', 'Date', { type: 'date' })}${fld('eic.design.departures', 'Design departures', { type: 'textarea' })}
+          ${fld('eic.design2.name', 'Designer 2 name (optional)')}${fld('eic.design2.date', 'Date', { type: 'date' })}
+          <h3>Construction</h3>${fld('eic.construction.name', 'Constructor name')}${fld('eic.construction.date', 'Date', { type: 'date' })}${fld('eic.construction.departures', 'Construction departures', { type: 'textarea' })}
+          <h3>Inspection & testing</h3>${fld('eic.inspection.name', 'Inspector name')}${fld('eic.inspection.date', 'Date', { type: 'date' })}${fld('eic.inspection.departures', 'I&T departures', { type: 'textarea' })}`}
+        <button class="btn" id="eicFillMe">Use my Settings name for blank signatories</button></div>
+        <div class="card"><h2>Declaration signature</h2>
+          ${fld('declaration.inspector.name', 'Name (capitals)')}${fld('declaration.inspector.position', 'Position')}
+          ${fld('declaration.inspector.date', 'Date', { type: 'date' })}
+          ${settings.inspector.signature ? fld('declaration.inspector.useSaved', 'Use my saved signature', { type: 'check' }) : ''}
+          <button class="btn" id="sigIns">Sign</button>
+          ${sigImgE ? `<img class="sigprev" src="${sigImgE}" alt="signature">` : ''}</div>`;
+      bindFields(main, job, p => { if (p === 'eic.singleSignature') { scheduleSave(); VIEWS.summary(); } });
+      $('#eicFillMe').onclick = () => { const n = settings.inspector?.name || ''; const d0 = today();
+        for (const path of ['eic.inspection', 'eic.design', 'eic.construction']) { const o = path.split('.').reduce((a, k) => a[k], job); if (!o.name) { o.name = n; o.date = o.date || d0; } }
+        if (!job.declaration.inspector.name) job.declaration.inspector.name = n;
+        scheduleSave(); VIEWS.summary(); toast('Filled from Settings'); };
+      $('#sigIns').onclick = () => signaturePad(url => { job.declaration.inspector.signature = url; job.declaration.inspector.useSaved = false; scheduleSave(); VIEWS.summary(); });
+      return;
+    }
     const sigImg = d.inspector.useSaved && settings.inspector.signature ? settings.inspector.signature : d.inspector.signature;
     main.innerHTML = `<div class="card"><h2>E · Summary of condition</h2>
       <div class="assess ${a === 'SATISFACTORY' ? 'ok' : 'bad'}">${a}<small>Set automatically: C1 ${cc.C1}, C2 ${cc.C2}, C3 ${cc.C3}, FI ${cc.FI}${EDITIONS[job.edition]?.fiUnsatisfactory ? ' (FI counts as unsatisfactory in this edition)' : ' · C3/FI are advisory under A4:2026'}</small></div><br>
@@ -385,7 +451,7 @@ const VIEWS = {
     main.innerHTML = `<div class="card"><h2>Check & issue</h2>
       <div class="assess ${a === 'SATISFACTORY' ? 'ok' : 'bad'}">${a}</div>
       <p><b style="color:var(--bad)">${sm.errors} must fix</b> · <b style="color:var(--warn)">${sm.warnings} to check</b></p>
-      <button class="btn pri big" id="pdf">📄 Create PDF</button>
+      <button class="btn pri big" id="pdf">📄 Create PDF</button><button class="btn" id="schedPdf">Circuit schedule only</button>
       <button class="btn big" id="share">📤 Share PDF (email, WhatsApp…)</button>
       <button class="btn big" id="issue">${job.status === 'issued' ? '↩ Mark as draft' : '✅ Mark as issued'}</button>
       <button class="btn big" id="json">⬇ Export this job (JSON)</button></div>
@@ -393,11 +459,15 @@ const VIEWS = {
     main.querySelectorAll('[data-set]').forEach(a2 => (a2.href = '#/settings'));
     const lockRef = () => { if (!job.refLocked) { job.refLocked = true; job.pdfMade = Date.now(); scheduleSave(); } };
     const make = () => { const { jsPDF } = window.jspdf; return buildReport(jsPDF, job, settings); };
+    const makeSched = () => { const { jsPDF } = window.jspdf; return buildReport(jsPDF, { ...job, kind: 'sched', sched: { parentRef: job.reportNo, parentType: kindMeta(job).full } }, settings); };
     const fname = () => `${job.reportNo || 'EICR'} ${job.installation?.address?.split(/[,\n]/)[0] || ''}`.trim().replace(/[^\w\- ]+/g, '') + '.pdf';
     $('#pdf').onclick = () => {
       if (sm.errors && !confirm(`${sm.errors} item(s) still need fixing. Create the PDF anyway (e.g. as a draft)?`)) return;
       try { make().save(fname()); lockRef(); toast('PDF created'); } catch (err) { alert('PDF failed: ' + err.message); console.error(err); }
     };
+    $('#schedPdf') && ($('#schedPdf').onclick = () => {
+      try { makeSched().save(`${job.reportNo || 'schedule'} circuit schedule.pdf`); toast('Schedule PDF created'); } catch (err) { alert('PDF failed: ' + err.message); console.error(err); }
+    });
     $('#share').onclick = async () => {
       try {
         const blob = make().output('blob'); lockRef(); const file = new File([blob], fname(), { type: 'application/pdf' });
@@ -454,7 +524,8 @@ function renderBoards() {
     <div class="row">${fld(`boards.${currentBoard}.zdb`, 'Zdb (Ω)', { type: 'num' })}${fld(`boards.${currentBoard}.ipf`, 'Ipf at board (kA)', { type: 'num' })}</div>
     ${fld(`boards.${currentBoard}.polarityOk`, 'Correct polarity confirmed', { type: 'check' })}${fld(`boards.${currentBoard}.phaseSeqOk`, 'Phase sequence confirmed (3-phase)', { type: 'check' })}${fld(`boards.${currentBoard}.spdOk`, 'SPD operational status confirmed', { type: 'check' })}
     <div class="btns"><button class="btn" id="zdbZe">Zdb/Ipf = origin (Ze, Ipf)</button><button class="btn danger" id="delB">Delete board</button></div></details>
-  <div class="card"><h2>Circuits (${b.circuits.length})</h2>
+  <div class="card"><h2>Circuits (${b.circuits.length}${kindOf(job) === 'mw' ? ' / 4 max' : ''})</h2>
+    ${kindOf(job) === 'mw' ? '<p class="muted">Minor Works covers alterations to <b>existing</b> circuits only (up to 4 on this form). If you are adding a new circuit or replacing the board, start an EIC instead.</p>' : ''}
     <div class="btns"><button class="btn pri" id="dictate" style="font-size:17px">🎤 Dictate results</button><label class="btn" id="aiPhoto" style="font-size:17px;display:inline-flex;align-items:center">📷 Take photo<input type="file" id="aiFile" accept="image/*" capture="environment" hidden></label><label class="btn" id="aiGallery" style="font-size:17px;display:inline-flex;align-items:center">🖼️ Choose from gallery<input type="file" id="aiFileGal" accept="image/*" hidden></label>${voiceUndo.length ? '<button class="btn" id="undoDict">↶ Undo last dictation/fill</button>' : ''}</div>
     <div class="muted">Quick add:</div><div class="fillbar">${QUICK_CIRCUITS.map((q, i) => `<button class="btn" data-q="${i}">＋ ${esc(q.name)}</button>`).join('')}<button class="btn" data-q="-1">＋ Blank</button></div>
     <div class="muted">Fill all rows:</div><div class="fillbar"><button class="btn" data-fill="polarity">Polarity ✓</button><button class="btn" data-fill="testV">IR 500 V</button><button class="btn" data-fill="ir">IR &gt;999</button><button class="btn" data-fill="rcdBtn">RCD btn ✓</button><button class="btn" data-fill="afddBtn">AFDD N/A</button><button class="btn" data-fill="bc">kA 6</button><button class="btn" id="domDef">🏠 Domestic defaults</button></div>
@@ -491,7 +562,8 @@ function renderBoards() {
     if (t.id === 'zdbZe') { b.zdb = job.supply.ze; b.ipf = job.supply.ipf; scheduleSave(); renderBoards(); return; }
     if (t.dataset.spd) { b.spd = b.spd || {}; b.spd[t.dataset.spd] = !b.spd[t.dataset.spd]; if (t.dataset.spd === 'NA' && b.spd.NA) b.spd.T1 = b.spd.T2 = b.spd.T3 = false; else if (t.dataset.spd !== 'NA') b.spd.NA = false; scheduleSave(); renderBoards(); return; }
     if (t.dataset.q != null) {
-      const q = +t.dataset.q; const n = Math.max(0, ...b.circuits.map(c => parseInt(c.no) || 0)) + 1;
+      const q = +t.dataset.q; if (kindOf(job) === 'mw' && b.circuits.length >= 4) return toast('Minor Works allows up to 4 circuits – use an EIC for more');
+      const n = Math.max(0, ...b.circuits.map(c => parseInt(c.no) || 0)) + 1;
       b.circuits.push(newCircuit(n, q >= 0 ? structuredClone(QUICK_CIRCUITS[q].c) : {})); scheduleSave(); renderBoards();
       const w = main.querySelector('.tbl-wrap'); w.scrollTop = w.scrollHeight; return;
     }
@@ -559,7 +631,7 @@ function markRow(tr, c, b) {
 function markRows(b) { main.querySelectorAll('table.ct tbody tr').forEach(tr => markRow(tr, b.circuits[+tr.dataset.r], b)); }
 
 // ---------- AI board photo import ----------
-const APP_VERSION = '1.7.0';
+const APP_VERSION = '1.8.0';
 const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`${what} timed out after ${ms / 1000} s`)), ms))]);
 function drawToJpeg(src, w, h, max, q) {
   const s = Math.min(1, max / Math.max(w, h)); const cv = document.createElement('canvas');

@@ -135,3 +135,21 @@ export const QUICK_CIRCUITS = [
 ];
 
 export const WIRING_TYPES = { A: 'Thermoplastic sheathed (T&E)', B: 'Thermoplastic in metal conduit', C: 'Thermoplastic in non-metal conduit', D: 'Thermoplastic in metal trunking', E: 'Thermoplastic in non-metal trunking', F: 'Thermoplastic SWA', G: 'Thermosetting SWA', H: 'Mineral insulated', O: 'Other' };
+
+// EIC Section H – Schedule of Inspections (BS 7671:2018+A4:2026 model form)
+export const EIC_ITEMS = [
+  ['1.0', "Condition of consumer's intake equipment (visual inspection only)"],
+  ['2.0', 'Parallel or switched alternative sources of supply'],
+  ['3.0', 'Protective measure: Automatic Disconnection of Supply (ADS)'],
+  ['4.0', 'Basic protection'],
+  ['5.0', 'Protective measures other than ADS'],
+  ['6.0', 'Additional protection'],
+  ['7.0', 'Distribution equipment'],
+  ['8.0', 'Circuits (distribution and final)'],
+  ['9.0', 'Isolation and switching'],
+  ['10.0', 'Current-using equipment (permanently connected)'],
+  ['11.0', 'Identification and notices'],
+  ['12.0', 'Location(s) containing a bath or shower'],
+  ['13.0', 'Other special installations or locations'],
+  ["14.0", "Prosumer's low voltage electrical installation(s)"],
+];

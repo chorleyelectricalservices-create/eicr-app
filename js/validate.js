@@ -128,9 +128,21 @@ export function validateJob(job, settings = {}) {
   req(job.reportNo, 'Report', 'Report number missing', 'client');
   req(job.client?.name, 'A Client', 'Name of person ordering the report missing', 'client');
   req(job.client?.address, 'A Client', 'Address of person ordering the report missing', 'client');
+  const kind = ['eic', 'mw'].includes(job.kind) ? job.kind : 'eicr';
+  const isR = kind === 'eicr';
+  if (isR) {
   req(job.reason, 'B Reason', 'Reason for producing the report missing', 'client');
   req(job.inspDates, 'B Reason', 'Date(s) of inspection missing', 'client');
+  }
+  if (kind === 'eic') { req(job.eic?.installType, 'B Installation', 'Type of work (new/addition/alteration) missing', 'client'); req(job.eic?.description, 'B Installation', 'Description of installation missing', 'client'); }
+  if (kind === 'mw') {
+    req(job.mw?.description, 'A Minor works', 'Description of the minor works missing', 'client');
+    req(job.mw?.completed, 'A Minor works', 'Date minor works completed missing', 'client');
+    const n = (job.boards || []).reduce((a, b) => a + (b.circuits?.length || 0), 0);
+    if (n > 4) add('error', 'Circuits', `Minor Works covers up to 4 circuits (${n} recorded) – use an EIC`, 'boards');
+  }
   req(job.installation?.address, 'C Installation', 'Installation address missing', 'client');
+  if (isR) {
   req(job.installation?.premises, 'C Installation', 'Description of premises missing', 'client');
   req(job.installation?.wiringAge, 'C Installation', 'Estimated age of wiring missing', 'client');
   req(job.installation?.alterations, 'C Installation', 'Evidence of alterations (Yes/Not apparent) missing', 'client');
@@ -139,13 +151,14 @@ export function validateJob(job, settings = {}) {
   req(job.extent?.agreedWith, 'D Extent', '"Agreed with" (limitations) missing', 'extent');
   req(job.summary?.general, 'E Summary', 'General condition of the installation missing', 'summary');
   req(job.next?.date, 'F Next inspection', 'Next inspection date missing', 'summary');
-  if (job.next?.date && job.inspDates && job.next.date <= String(job.inspDates).slice(0, 10)) add('error', 'F Next inspection', 'Next inspection date must be after the inspection date', 'summary');
+  }
+  if (isR && job.next?.date && job.inspDates && job.next.date <= String(job.inspDates).slice(0, 10)) add('error', 'F Next inspection', 'Next inspection date must be after the inspection date', 'summary');
   const ins = job.declaration?.inspector || {};
   req(ins.name, 'G Declaration', 'Inspector name missing', 'summary');
   if (!ins.signature && !(ins.useSaved && settings.inspector?.signature)) add('error', 'G Declaration', 'Inspector signature missing', 'summary');
   req(ins.date, 'G Declaration', 'Inspector date missing', 'summary');
   const au = job.declaration?.authoriser || {};
-  if (!au.sameAsInspector) {
+  if (isR && !au.sameAsInspector) {
     req(au.name, 'G Declaration', 'Authoriser (QS) name missing', 'summary');
     req(au.signature, 'G Declaration', 'Authoriser (QS) signature missing', 'summary');
   }
@@ -175,11 +188,12 @@ export function validateJob(job, settings = {}) {
   if (o.meansEarthing === 'Electrode' || s.earthing === 'TT') { req(o.electrodeType, 'J Particulars', 'Earth electrode type missing', 'supply'); req(o.electrodeRa, 'J Particulars', 'Earth electrode resistance missing', 'supply'); }
   req(o.earthingCsa, 'J Particulars', 'Earthing conductor csa missing', 'supply');
   req(o.bondingCsa, 'J Particulars', 'Main protective bonding conductor csa missing', 'supply');
-  req(o.msBsen, 'J Particulars', 'Main switch BS (EN) missing', 'supply');
-  req(o.msCurrent, 'J Particulars', 'Main switch current rating missing', 'supply');
+  if (kind !== 'mw') req(o.msBsen, 'J Particulars', 'Main switch BS (EN) missing', 'supply');
+  if (kind !== 'mw') req(o.msCurrent, 'J Particulars', 'Main switch current rating missing', 'supply');
   if (/TN-C-S/.test(s.earthing) && num(o.bondingCsa) != null && num(o.bondingCsa) < 10) add('warn', 'J Particulars', `Main bonding ${o.bondingCsa} mm² is below 10 mm² usually needed for PME`, 'supply');
   if (o.msRcdType && o.msRcdTime && num(o.msRcdTime) > 300 && !/S/i.test(o.msRcdType)) add('error', 'J Particulars', `Main switch RCD trip time ${o.msRcdTime} ms exceeds 300 ms`, 'supply');
 
+  if (isR) {
   // Inspection schedule
   const insp = job.inspection || {};
   const blank = INSPECTION_ITEMS.filter(i => !insp[i.id]?.o);
@@ -197,6 +211,7 @@ export function validateJob(job, settings = {}) {
     if (!(x.items || []).length) add('warn', 'K Observations', `Observation ${i + 1}: not linked to a schedule of inspection item`, 'observations');
   });
   if (!obs.length && !job.noRemedial) add('warn', 'K Observations', 'No observations – tick "No remedial action is required" if that is correct', 'observations');
+  }
 
   // Boards & circuits
   if (!job.boards?.length) add('error', 'Boards', 'No distribution board added', 'boards');
@@ -221,7 +236,7 @@ export function validateJob(job, settings = {}) {
 
   // Assessment consistency
   const failing = issues.filter(i => i.level === 'error' && /Zs .*exceeds|below 1 MΩ|trip time .*exceeds|did not trip|Incorrect polarity/.test(i.msg));
-  if (failing.length && overallAssessment(job) === 'SATISFACTORY') add('warn', 'E Summary', 'Test results fail but no C1/C2 observation is recorded – report would show SATISFACTORY', 'observations');
+  if (isR && failing.length && overallAssessment(job) === 'SATISFACTORY') add('warn', 'E Summary', 'Test results fail but no C1/C2 observation is recorded – report would show SATISFACTORY', 'observations');
   return issues;
 }
 
