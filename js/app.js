@@ -5,6 +5,7 @@ import { validateJob, overallAssessment, checkCircuit, circuitMaxZs, codeCounts,
 import { tableMaxZs } from './zs.js';
 import { buildReport } from './pdf.js';
 import { sampleJob } from './sample.js';
+import { allocateRef, planRestore, isDuplicate, maxRefNum, DEFAULT_REF_PREFIX, cleanPrefix } from './refno.js';
 import { planDomestic, markTyp, DEFAULT_RULES_TEXT } from './domestic.js';
 import { ai, AI_TIMEOUT_MS, aiCfg, PROVIDERS, getKey, setKey, planImport, markImported, boardPlan } from './ai.js';
 import { parseDictation, FIELD_LABELS } from './voice.js';
@@ -150,13 +151,13 @@ async function renderJobs() {
   };
   draw('');
   $('#q').oninput = e => draw(e.target.value);
-  $('#new').onclick = async () => { const j = newJob(settings); settings.nextNumber = (settings.nextNumber || 1) + 1; await saveSettings(); await db.putJob(j); location.hash = `#/job/${j.id}/client`; };
+  $('#new').onclick = async () => { const j = newJob(settings); const a = allocateRef(settings, await db.allJobs()); j.reportNo = a.ref; settings.nextNumber = a.next; await saveSettings(); await db.putJob(j); location.hash = `#/job/${j.id}/client`; };
   list.onclick = async e => {
     const d = e.target.closest('[data-dup]'), x = e.target.closest('[data-del]');
     if (d) {
       const src = await db.getJob(d.dataset.dup); const j = structuredClone(src);
-      j.id = uid(); j.created = j.updated = Date.now(); j.status = 'draft';
-      j.reportNo = `${settings.reportPrefix || ''}${String(settings.nextNumber || 1).padStart(4, '0')}`; settings.nextNumber++; await saveSettings();
+      j.id = uid(); j.created = j.updated = Date.now(); j.status = 'draft'; j.refLocked = false; j.pdfMade = 0;
+      { const a = allocateRef(settings, await db.allJobs()); j.reportNo = a.ref; settings.nextNumber = a.next; } await saveSettings();
       j.declaration.inspector.signature = ''; j.declaration.authoriser.signature = ''; j.inspDates = today();
       j.declaration.inspector.date = today(); j.declaration.authoriser.date = today();
       j.next.date = addYears(today(), j.next.intervalYears || 5);
@@ -175,9 +176,11 @@ async function renderJobs() {
       const data = JSON.parse(await file.text());
       const js = data.jobs || (data.id ? [data] : []);
       if (!js.length && !data.settings) throw new Error('No reports found in file');
-      if (data.settings && confirm('Also restore settings (your details, logo, signature) from the backup?')) { settings = { ...defaultSettings(), ...data.settings }; await saveSettings(); }
-      for (const j of js) await db.putJob(j);
-      toast(`Imported ${js.length} report(s)`); renderJobs();
+      if (data.settings && confirm('Also restore settings (your details, logo, signature) from the backup?')) { const keep = settings.nextNumber; settings = { ...defaultSettings(), ...data.settings }; settings.nextNumber = Math.max(Number(keep) || 1, Number(settings.nextNumber) || 1); settings.refPrefix ??= DEFAULT_REF_PREFIX; }
+      const r = planRestore(settings, await db.allJobs(), js); settings.nextNumber = r.nextNumber; await saveSettings();
+      for (const j of r.jobs) await db.putJob(j);
+      if (r.renamed.length) alert(`${r.renamed.length} report(s) had a reference already used on this phone and were given new numbers:\n` + r.renamed.map(([a, b]) => `${a || '(none)'} → ${b}`).join('\n'));
+      toast(`Imported ${js.length} report(s). Next number: ${settings.nextNumber}`); renderJobs();
     } catch (err) { alert('Import failed: ' + err.message); }
   };
 }
@@ -188,7 +191,7 @@ const VIEWS = {
   client() {
     fresh();
     main.innerHTML = `
-    <div class="card"><h2>Report</h2>${fld('reportNo', 'Report number')}${fld('edition', 'Edition', { type: 'select', options: Object.entries(EDITIONS).map(([k, v]) => [k, v.label]) })}</div>
+    <div class="card"><h2>Report</h2>${job.refLocked ? `<label class="f"><span>Report reference 🔒</span><input value="${esc(job.reportNo)}" readonly style="background:#f1f5f9"></label><p class="muted">Locked because a PDF has been made${job.status === 'issued' ? '/issued' : ''}. <button class="btn" id="chgRef">Change reference…</button></p>` : `<label class="f"><span>Report reference</span><input id="refIn" value="${esc(job.reportNo)}"></label>`}${fld('edition', 'Edition', { type: 'select', options: Object.entries(EDITIONS).map(([k, v]) => [k, v.label]) })}</div>
     <div class="card"><h2>A · Person ordering the report</h2>${fld('client.name', 'Name')}${fld('client.address', 'Address', { type: 'textarea' })}</div>
     <div class="card"><h2>B · Reason for the report</h2>${fld('reason', 'Reason', { list: ['Periodic inspection', 'Change of tenancy', 'Landlord requirement (5-yearly)', 'Sale of property', 'Purchase survey', 'Mortgage / insurance requirement', 'Change of occupancy'] })}
       ${fld('inspDates', 'Date(s) of inspection', { type: 'date' })}</div>
@@ -201,6 +204,14 @@ const VIEWS = {
       ${fld('installation.alterations', 'Evidence of additions/alterations?', { type: 'seg', options: ['Yes', 'Not apparent'] })}
       ${fld('installation.alterationsAge', 'If yes, estimated age (yrs)', { type: 'num' })}
       ${fld('installation.records', 'Installation records available? (651.1)', { type: 'seg', options: ['Yes', 'No'] })}</div>`;
+    $('#refIn') && ($('#refIn').onchange = async e => { const v = e.target.value.trim(); if (!v) { e.target.value = job.reportNo; return toast('Reference can’t be blank'); }
+      if (isDuplicate(v, await db.allJobs(), job.id)) { e.target.value = job.reportNo; return alert(`${v} is already used by another report on this phone.`); }
+      job.reportNo = v; scheduleSave(); refreshHeader(); });
+    $('#chgRef') && ($('#chgRef').onclick = async () => {
+      if (!confirm(`Warning: a PDF of this report has already been made${job.status === 'issued' ? ' and it is marked issued' : ''} with reference ${job.reportNo}. Changing it means copies already sent won’t match. Change anyway?`)) return;
+      const v = prompt('New reference:', job.reportNo); if (!v || v.trim() === job.reportNo) return;
+      if (isDuplicate(v.trim(), await db.allJobs(), job.id)) return alert(`${v.trim()} is already used by another report on this phone.`);
+      (job.refHistory ??= []).push({ from: job.reportNo, to: v.trim(), at: new Date().toISOString() }); job.reportNo = v.trim(); scheduleSave(); refreshHeader(); VIEWS.client(); });
     bindFields(main, job, p => { if (p === 'reportNo' || p.startsWith('installation.address')) refreshHeader(); });
     $('#sameAddr').onclick = () => { job.installation.address = job.client.address; scheduleSave(); VIEWS.client(); };
   },
@@ -380,22 +391,23 @@ const VIEWS = {
       <button class="btn big" id="json">⬇ Export this job (JSON)</button></div>
       <div class="card"><h2>Validation</h2>${iss.length ? iss.map(i => `<a class="issue ${i.level}" href="#/job/${job.id}/${i.target === 'settings' ? '' : i.target}" ${i.target === 'settings' ? 'data-set="1"' : ''}><b>${i.level === 'error' ? '⛔' : '⚠️'}</b><span>${esc(i.msg)}<small>${esc(i.section)}</small></span></a>`).join('') : '<p>✅ Everything looks complete.</p>'}</div>`;
     main.querySelectorAll('[data-set]').forEach(a2 => (a2.href = '#/settings'));
+    const lockRef = () => { if (!job.refLocked) { job.refLocked = true; job.pdfMade = Date.now(); scheduleSave(); } };
     const make = () => { const { jsPDF } = window.jspdf; return buildReport(jsPDF, job, settings); };
     const fname = () => `${job.reportNo || 'EICR'} ${job.installation?.address?.split(/[,\n]/)[0] || ''}`.trim().replace(/[^\w\- ]+/g, '') + '.pdf';
     $('#pdf').onclick = () => {
       if (sm.errors && !confirm(`${sm.errors} item(s) still need fixing. Create the PDF anyway (e.g. as a draft)?`)) return;
-      try { make().save(fname()); toast('PDF created'); } catch (err) { alert('PDF failed: ' + err.message); console.error(err); }
+      try { make().save(fname()); lockRef(); toast('PDF created'); } catch (err) { alert('PDF failed: ' + err.message); console.error(err); }
     };
     $('#share').onclick = async () => {
       try {
-        const blob = make().output('blob'); const file = new File([blob], fname(), { type: 'application/pdf' });
+        const blob = make().output('blob'); lockRef(); const file = new File([blob], fname(), { type: 'application/pdf' });
         if (navigator.canShare?.({ files: [file] })) await navigator.share({ files: [file], title: job.reportNo });
         else { downloadBlob(blob, fname()); toast('Sharing not supported here – downloaded instead'); }
       } catch (err) { if (err.name !== 'AbortError') alert('Share failed: ' + err.message); }
     };
     $('#issue').onclick = () => {
       if (job.status !== 'issued' && sm.errors && !confirm('There are still items to fix. Mark as issued anyway?')) return;
-      job.status = job.status === 'issued' ? 'draft' : 'issued'; scheduleSave(); VIEWS.check();
+      job.status = job.status === 'issued' ? 'draft' : 'issued'; if (job.status === 'issued') job.refLocked = true; scheduleSave(); VIEWS.check();
     };
     $('#json').onclick = () => downloadBlob(new Blob([JSON.stringify(job, null, 1)], { type: 'application/json' }), `${job.reportNo}.json`);
   },
@@ -547,7 +559,7 @@ function markRow(tr, c, b) {
 function markRows(b) { main.querySelectorAll('table.ct tbody tr').forEach(tr => markRow(tr, b.circuits[+tr.dataset.r], b)); }
 
 // ---------- AI board photo import ----------
-const APP_VERSION = '1.6.0';
+const APP_VERSION = '1.7.0';
 const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`${what} timed out after ${ms / 1000} s`)), ms))]);
 function drawToJpeg(src, w, h, max, q) {
   const s = Math.min(1, max / Math.max(w, h)); const cv = document.createElement('canvas');
@@ -685,7 +697,8 @@ function renderSettings() {
     <p class="muted">Used by “🏠 Domestic defaults” and after photo import. Only fills empty boxes. One rule per line, first match wins:<br><code>words in description | ratings A (e.g. 6 or 40-50) | live/cpc mm² | wiring code | ref method</code><br>Max Zs is filled automatically from the BS 7671 tables from device type/curve/rating.</p>
     <textarea id="domTxt" style="min-height:220px;font-size:13px;font-family:monospace">${esc(settings.domesticRules || DEFAULT_RULES_TEXT)}</textarea>
     <div class="btns"><button class="btn pri" id="domSave">Save rules</button><button class="btn" id="domReset">Reset to built-in</button></div></div>
-  <div class="card"><h2>Reports</h2><div class="row">${fld('reportPrefix', 'Report no. prefix', { obj: settings, scope: 'settings' })}${fld('nextNumber', 'Next number', { obj: settings, scope: 'settings', type: 'num' })}</div>
+  <div class="card"><h2>Reports</h2><div class="row"><label class="f"><span>Reference prefix</span><input id="refPre" value="${esc(settings.refPrefix || DEFAULT_REF_PREFIX)}" maxlength="8"></label><label class="f"><span>Next number</span><input id="refNext" inputmode="numeric" value="${esc(settings.nextNumber)}"></label></div>
+    <p class="muted">New reports are numbered <b>${esc(cleanPrefix(settings.refPrefix) || DEFAULT_REF_PREFIX)}-EICR-YYMM-${String(settings.nextNumber).padStart(4, '0')}</b>. The number only ever goes up (never reused, even if a report is deleted). Restoring a backup on a new phone continues the sequence.</p>
     ${fld('defaultInterval', 'Default next inspection (years)', { obj: settings, scope: 'settings', type: 'seg', options: ['1', '3', '5', '10'] })}
     ${fld('zsRuleOfThumb', 'Check measured Zs against 0.8 × tabulated max (rule of thumb)', { obj: settings, scope: 'settings', type: 'check' })}</div>
   <div class="card"><h2>Observation library</h2><p class="muted">One per line: CODE | regulation | description | schedule item(s)</p>
@@ -704,6 +717,9 @@ function renderSettings() {
     settings.obsLibrary = $('#libTxt').value.split('\n').map(l => l.split('|').map(s => s.trim())).filter(p => p.length >= 3 && p[2]).map(([code, reg, desc, items]) => ({ code: code.toUpperCase(), reg, desc, items: items ? items.split(/[ ,]+/).filter(x => INSPECTION_ITEMS.some(i => i.id === x)) : suggestItems(desc, reg, 1) }));
     await saveSettings(); toast(`Saved ${settings.obsLibrary.length} entries`);
   };
+  $('#refPre').onchange = async e => { const v = cleanPrefix(e.target.value); if (!v) { e.target.value = settings.refPrefix; return toast('Prefix needs letters/numbers'); } settings.refPrefix = v; await saveSettings(); const y = scrollY; renderSettings(); scrollTo(0, y); };
+  $('#refNext').onchange = async e => { const v = parseInt(e.target.value, 10); const min = Math.max(Number(settings.nextNumber) || 1, maxRefNum(await db.allJobs()) + 1);
+    if (!(v >= min)) { e.target.value = settings.nextNumber; return alert(`The number can only go up (minimum ${min}) so references are never reused.`); } settings.nextNumber = v; await saveSettings(); const y = scrollY; renderSettings(); scrollTo(0, y); };
   $('#domSave').onclick = async () => { const v = $('#domTxt').value.trim(); settings.domesticRules = v === DEFAULT_RULES_TEXT ? null : v; await saveSettings(); toast('Domestic rules saved'); };
   $('#domReset').onclick = async () => { settings.domesticRules = null; await saveSettings(); const y = scrollY; renderSettings(); scrollTo(0, y); };
   $('#libReset').onclick = async () => { settings.obsLibrary = null; await saveSettings(); renderSettings(); };
@@ -888,6 +904,8 @@ function signaturePad(done) {
   for (const k of ['contractor', 'inspector', 'instruments']) settings[k] = { ...defaultSettings()[k], ...(settings[k] || {}) };
   if (!settings.contractor.name || settings.contractor.name === 'Daniels Electrical') { settings.contractor.name = defaultSettings().contractor.name; await saveSettings(); }
   if (!settings.contractor.logo && !settings.contractor.logoRemoved) { settings.contractor.logo = defaultSettings().contractor.logo; await saveSettings(); }
+  if (settings.refPrefix === undefined) { settings.refPrefix = DEFAULT_REF_PREFIX; await saveSettings(); }
+  { const m = maxRefNum(await db.allJobs()) + 1; if ((Number(settings.nextNumber) || 1) < m) { settings.nextNumber = m; await saveSettings(); } }
   if (!s) await saveSettings();
   if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(err => console.warn('SW', err));
   if (navigator.storage?.persist) navigator.storage.persist().catch(() => {});

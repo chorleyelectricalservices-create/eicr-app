@@ -16,7 +16,7 @@ export function defaultSettings() {
     contractor: { name: 'Chorley Electrical Services Ltd', address: '', phone: '', email: '', regNo: '', scheme: '', logo: DEFAULT_LOGO },
     inspector: { name: '', position: 'Qualified Supervisor', signature: '' },
     instruments: { multi: '', ir: '', continuity: '', loop: '', rcd: '', earth: '' },
-    reportPrefix: 'EICR-', nextNumber: 1,
+    reportPrefix: 'EICR-', refPrefix: 'CES', nextNumber: 1, // refs: CES-EICR-YYMM-NNNN (js/refno.js)
     zsRuleOfThumb: true, defaultInterval: 5,
     obsLibrary: null, // null = use built-in list
     domesticRules: null, // null = built-in DEFAULT_RULES_TEXT (js/domestic.js)
