@@ -138,7 +138,7 @@ async function renderJobs() {
   <div id="list"></div>
   <div class="card"><h2>Backup</h2><p class="muted">Everything is stored only on this phone. Export a backup file regularly and keep it somewhere safe (e.g. Google Drive).</p>
    <div class="btns"><button class="btn" id="exp">⬇ Export backup</button><label class="btn" style="display:inline-flex;align-items:center">⬆ Import backup<input type="file" id="imp" accept="application/json,.json" hidden></label></div></div>
-  <button class="btn pri fab" id="new">＋ New EICR</button>`;
+  <button class="btn pri fab" id="new">＋ New certificate</button>`;
   const list = $('#list');
   const draw = q => {
     q = q.toLowerCase();
@@ -148,7 +148,7 @@ async function renderJobs() {
       <div style="font-weight:600;margin:4px 0">${esc(j.installation?.address || 'No address yet')}</div>
       <div class="meta"><span>${esc(j.client?.name || '')}</span><span><span class="badge ${j.status === 'issued' ? 'issued' : 'draft'}">${j.status === 'issued' ? 'Issued' : 'Draft'}</span> <span class="badge ${a === 'SATISFACTORY' ? 'ok' : 'bad'}">${a === 'SATISFACTORY' ? 'Sat' : 'Unsat'}</span></span></div></a>
       <div class="btns"><button class="btn" data-dup="${j.id}">⧉ Duplicate</button><button class="btn danger" data-del="${j.id}">🗑 Delete</button></div></div>`; }).join('')
-      : `<div class="card"><p>No reports yet.</p><p class="muted">Tap <b>＋ New EICR</b> to start, or load the sample job from Settings.</p></div>`;
+      : `<div class="card"><p>No certificates yet.</p><p class="muted">Tap <b>＋ New certificate</b> to start, or load the sample job from Settings.</p></div>`;
   };
   draw('');
   $('#q').oninput = e => draw(e.target.value);
