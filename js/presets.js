@@ -153,3 +153,31 @@ export const EIC_ITEMS = [
   ['13.0', 'Other special installations or locations'],
   ["14.0", "Prosumer's low voltage electrical installation(s)"],
 ];
+
+// ---------- EV charging (BS 7671 Section 722, IET CoP for EV Charging Equipment Installation) ----------
+export const EV_PME_OPTIONS = [
+  'TT – charger earthed to dedicated electrode, not PME (separated)',
+  '722.411.4.1(b) – installation earth electrode, Ra low enough (≤70 V on open PEN)',
+  '722.411.4.1(c) – open-PEN device, 70 V CPC-to-Earth (incl. built into charger)',
+  '722.411.4.1(d) – voltage-monitoring device 207–253 V (built into charger)',
+  '722.411.4.1(e) – equivalent alternative device',
+  'TN-S supply – PME restriction not applicable',
+  'Charging point indoors only (not reasonably expected to charge outdoors)',
+];
+/** True when PME is used for an outdoor-capable charger without one of the permitted methods. */
+export function evPmeRisk(job) {
+  const pme = /TN-C-S|PME|PNB/i.test(job.supply?.earthing || '');
+  const m = job.ev?.pmeMethod || '';
+  return pme && !/^(TT|722\.411\.4\.1|Charging point indoors)/.test(m);
+}
+export const EV_RCD_OPTIONS = [
+  'Type A RCD + RDC-DD 6 mA DC (built into charger)',
+  'Type B RCD',
+  'Type F RCD + RDC-DD 6 mA DC',
+  'Type EV RCD',
+];
+export const EV_DNO_OPTIONS = ['Connect & notify (within 28 days)', 'Apply to connect (prior approval)', 'Not required (no new demand / replacement)'];
+export const EV_POWER = ['3.6', '7.4', '11', '22'];
+export const EV_CONNECTORS = ['Type 2', 'Type 1', 'Type 2 socket (BS EN 62196-2)', 'CCS', 'Other'];
+export const EV_LOADMGMT = ['None needed – max demand within supply', 'CT clamp dynamic load management', 'Fixed current limit set in charger', 'Supply upgrade requested'];
+export const EV_CABLES = ['6242Y T&E', 'SWA 3-core', 'SWA 5-core', 'Singles in conduit', 'Other'];

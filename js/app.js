@@ -1,7 +1,7 @@
 import { db } from './db.js';
-import { newJob, newEic, newMw, newBoard, newCircuit, defaultSettings, uid, addYears, today } from './model.js';
-import { KINDS, kindOf, kindMeta } from './kinds.js';
-import { EDITIONS, INSPECTION_GROUPS, INSPECTION_ITEMS, DOMESTIC_TEMPLATE, OBS_LIBRARY, QUICK_CIRCUITS, WIRING_TYPES, CODES, EIC_ITEMS } from './presets.js';
+import { newJob, newEic, newMw, newEv, newBoard, newCircuit, defaultSettings, uid, addYears, today } from './model.js';
+import { KINDS, kindOf, kindMeta, isEicLike } from './kinds.js';
+import { EDITIONS, INSPECTION_GROUPS, INSPECTION_ITEMS, DOMESTIC_TEMPLATE, OBS_LIBRARY, QUICK_CIRCUITS, WIRING_TYPES, CODES, EIC_ITEMS, EV_PME_OPTIONS, EV_RCD_OPTIONS, EV_DNO_OPTIONS, EV_POWER, EV_CONNECTORS, EV_LOADMGMT, EV_CABLES, evPmeRisk } from './presets.js';
 import { validateJob, overallAssessment, checkCircuit, circuitMaxZs, codeCounts, sortObservations, summariseIssues } from './validate.js';
 import { tableMaxZs } from './zs.js';
 import { buildReport } from './pdf.js';
@@ -85,7 +85,7 @@ function bindFields(root, obj, onChange) {
 }
 
 // ---------- routing ----------
-const TAB_LABELS = { client: 'Client & site', extent: 'Extent', supply: 'Supply & origin', inspection: 'Inspection', boards: 'Circuits', observations: 'Observations', summary: 'Summary & sign', check: 'Check & PDF' };
+const TAB_LABELS = { client: 'Client & site', extent: 'Extent', supply: 'Supply & origin', inspection: 'Inspection', boards: 'Circuits', observations: 'Observations', ev: 'EV charger', summary: 'Summary & sign', check: 'Check & PDF' };
 const TABS_FOR = j => (kindMeta(j).tabs || []).map(k => [k, TAB_LABELS[k] || k]);
 async function route() {
   const h = location.hash.slice(1) || '/';
@@ -155,11 +155,12 @@ async function renderJobs() {
   $('#new').onclick = () => modal(`<h2>New certificate</h2><p class="muted">Choose the form that matches the work (BS 7671:2018+A4:2026).</p>
     <div class="btns" style="flex-direction:column;align-items:stretch"><button class="btn pri" data-k="eicr">EICR – Condition Report</button>
     <button class="btn" data-k="eic">EIC – Installation Certificate</button>
+    <button class="btn" data-k="ev">EV Charger – EIC + EV supplement</button>
     <button class="btn" data-k="mw">Minor Works Certificate</button>
     <button class="btn" id="mclose">Cancel</button></div>
     <p class="muted" style="margin-top:10px">Minor Works is only for additions/alterations that do <b>not</b> introduce a new circuit. A new circuit or consumer unit / distribution board replacement needs an EIC.</p>`);
     $('#modalBody').onclick = async e => { const t = e.target.closest('[data-k]'); if (!t) return; closeModal();
-      const makers = { eicr: newJob, eic: newEic, mw: newMw }; const j = makers[t.dataset.k](settings);
+      const makers = { eicr: newJob, eic: newEic, mw: newMw, ev: newEv }; const j = makers[t.dataset.k](settings);
       const a = allocateRef(settings, await db.allJobs(), new Date(), KINDS[t.dataset.k].ref); j.reportNo = a.ref; settings.nextNumber = a.next; await saveSettings(); await db.putJob(j); location.hash = `#/job/${j.id}/client`; };
   list.onclick = async e => {
     const d = e.target.closest('[data-dup]'), x = e.target.closest('[data-del]');
@@ -196,6 +197,70 @@ async function renderJobs() {
 function downloadBlob(blob, name) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000); }
 
 // ---------- job views ----------
+function evView() {
+  fresh();
+  job.ev ??= {};
+  const e = job.ev; const pmeRisk = evPmeRisk(job);
+  const tt = /^TT/.test(job.supply?.earthing || '') || /^TT|\(b\)/.test(e.pmeMethod || '');
+  main.innerHTML = `
+  <div class="card"><h2>Charging equipment</h2>
+    ${fld('ev.make', 'Make', { list: ['Zappi (myenergi)', 'Ohme', 'Pod Point', 'Hypervolt', 'Wallbox', 'Easee', 'Andersen', 'EO', 'Indra', 'Rolec', 'Project EV', 'Tesla Wall Connector'] })}
+    ${fld('ev.model', 'Model')}${fld('ev.serial', 'Serial number')}
+    ${fld('ev.powerKw', 'Rated power (kW)', { type: 'seg', options: EV_POWER })}
+    ${fld('ev.mode', 'Charging mode', { type: 'seg', options: ['Mode 3', 'Mode 2', 'Mode 4'] })}
+    ${fld('ev.outlet', 'Outlet', { type: 'seg', options: ['Tethered', 'Socket (untethered)'] })}
+    ${fld('ev.connector', 'Connector', { list: EV_CONNECTORS })}
+    ${fld('ev.phases', 'Supply', { type: 'seg', options: ['Single phase', 'Three phase'] })}
+    ${fld('ev.location', 'Location', { list: ['Outdoor – wall mounted', 'Outdoor – post/pedestal', 'Garage (indoor)', 'Car port', 'Driveway'] })}
+    ${fld('ev.ipRating', 'IP rating (≥ IP44 outdoors, 722.512.2.201)', { list: ['IP54', 'IP55', 'IP65', 'IP66'] })}
+    ${fld('ev.ikRating', 'IK rating (impact, ≥ IK08 where vehicle damage possible)', { list: ['IK08', 'IK10'] })}</div>
+  <div class="card"><h2>Earthing & PME (722.411.4.1)</h2>
+    <p class="muted">Supply earthing: <b>${esc(job.supply?.earthing || 'not set – see Supply tab')}</b></p>
+    ${pmeRisk ? '<p class="warnbox" style="background:#fef3c7;padding:8px;border-radius:6px">⚠ PME / TN-C-S supply without a permitted method. An outdoor (or outdoor-capable) charge point must not use the PME earth unless 722.411.4.1(b)–(e) is applied: open-PEN device (often built into the charger), earth electrode, or TT the charger.</p>' : ''}
+    ${fld('ev.pmeMethod', 'Method used', { type: 'select', options: ['', ...EV_PME_OPTIONS] })}
+    ${fld('ev.pmeNotes', 'Device details (model, threshold, isolation per Table 537.4)', { type: 'textarea' })}
+    ${tt ? `${fld('ev.electrodeType', 'Electrode type', { list: ['Rod', 'Tape', 'Plate'] })}${fld('ev.electrodeRa', 'Electrode resistance Ra (Ω)', { type: 'number' })}${fld('ev.electrodeLocation', 'Electrode location')}` : ''}</div>
+  <div class="card"><h2>Protection</h2>
+    ${fld('ev.rcdType', 'RCD / DC fault protection (722.531.3.101)', { type: 'select', options: ['', ...EV_RCD_OPTIONS] })}
+    ${fld('ev.rcdIdn', 'RCD IΔn (mA)', { type: 'seg', options: ['30'] })}
+    ${fld('ev.deviceBsen', 'Protective device BS (EN)', { list: ['61009', '60898', '60947-2'] })}
+    ${fld('ev.deviceType', 'Type', { type: 'seg', options: ['B', 'C', 'D'] })}
+    ${fld('ev.deviceRating', 'Rating (A)', { type: 'seg', options: ['16', '20', '32', '40'] })}
+    <p class="muted">AFDD not required for EV circuits to BS EN 61851 with BS EN IEC 62196-2 outlets (722.421.1.7.201). Each charge point on its own dedicated final circuit (Section 722).</p></div>
+  <div class="card"><h2>Cable</h2>
+    ${fld('ev.cableType', 'Cable type', { list: EV_CABLES })}
+    ${fld('ev.cableCsa', 'Live csa (mm²)', { type: 'seg', options: ['4', '6', '10', '16'] })}
+    ${fld('ev.cpcCsa', 'CPC csa (mm²)', { list: ['2.5', '4', '6', '10'] })}
+    ${fld('ev.cableLength', 'Length (m)', { type: 'number' })}
+    ${fld('ev.refMethod', 'Reference method', { list: ['C (clipped direct)', 'A', 'B', '100', '101', '102', '103', 'D (buried)', 'E'] })}
+    ${fld('ev.cableRoute', 'Route / installation method')}
+    ${fld('ev.vdPct', 'Voltage drop (%) – max 5% (power)', { type: 'number' })}</div>
+  <div class="card"><h2>Max demand & load (311.1)</h2>
+    ${fld('ev.supplyFuseA', 'Supply fuse (A)', { type: 'seg', options: ['60', '80', '100'] })}
+    ${fld('ev.maxDemandA', 'Assessed max demand incl. EV (A)', { type: 'number' })}
+    ${fld('ev.admdNotes', 'Assessment / diversity notes', { type: 'textarea' })}
+    ${fld('ev.loadMgmt', 'Load management', { list: EV_LOADMGMT })}
+    ${fld('ev.ctClamp', 'CT clamp fitted & orientation verified', { type: 'check' })}</div>
+  <div class="card"><h2>DNO notification</h2>
+    ${fld('ev.dnoMethod', 'Method', { type: 'select', options: ['', ...EV_DNO_OPTIONS] })}
+    ${fld('ev.dno', 'DNO', { list: ['Electricity North West', 'SP Energy Networks', 'Northern Powergrid', 'National Grid (WPD)', 'UK Power Networks', 'SSEN', 'NIE Networks'] })}
+    ${fld('ev.dnoDate', 'Date submitted', { type: 'date' })}${fld('ev.dnoRef', 'DNO reference')}</div>
+  <div class="card"><h2>Smart charge point (SI 2021/1467)</h2>
+    ${fld('ev.smartCompliant', 'Charger is compliant with the Smart Charge Points Regulations 2021', { type: 'check' })}
+    ${fld('ev.offPeakDefault', 'Default charging hours set outside peak (8–11 am, 4–10 pm weekdays) – owner may override', { type: 'check' })}
+    ${fld('ev.randomDelay', 'Randomised delay (up to 600 s) enabled by default', { type: 'check' })}
+    ${fld('ev.smartNotes', 'Notes', { type: 'textarea' })}</div>
+  <div class="card"><h2>Commissioning & handover</h2>
+    ${fld('ev.commissioned', 'Commissioned & test charge carried out', { type: 'check' })}
+    ${fld('ev.wifiApp', 'Connectivity / app', { list: ['WiFi – app set up with customer', 'Ethernet', '4G/SIM', 'Not connected (customer declined)'] })}
+    ${fld('ev.firmware', 'Firmware version')}
+    ${fld('ev.customerShown', 'Customer shown operation, emergency isolation & app', { type: 'check' })}
+    ${fld('ev.manualsLeft', 'Manufacturer instructions & certificate left with customer', { type: 'check' })}
+    ${fld('ev.handover', 'Handover complete', { type: 'check' })}
+    ${fld('ev.photos', 'Installation photos taken (kept on file)', { type: 'check' })}
+    ${fld('ev.notes', 'Other notes', { type: 'textarea' })}</div>`;
+  bindFields(main, job, p => { if (p === 'ev.pmeMethod') evView(); });
+}
 function eicInspection() {
   fresh();
   job.eicInspection ??= {};
@@ -216,7 +281,7 @@ const VIEWS = {
     <div class="card"><h2>A · Person ordering the report</h2>${fld('client.name', 'Name')}${fld('client.address', 'Address', { type: 'textarea' })}</div>
     ${kindOf(job) === 'eicr' ? `<div class="card"><h2>B · Reason for the report</h2>${fld('reason', 'Reason', { list: ['Periodic inspection', 'Change of tenancy', 'Landlord requirement (5-yearly)', 'Sale of property', 'Purchase survey', 'Mortgage / insurance requirement', 'Change of occupancy'] })}
       ${fld('inspDates', 'Date(s) of inspection', { type: 'date' })}</div>` : ''}
-    ${kindOf(job) === 'eic' ? `<div class="card"><h2>B · Installation details (EIC)</h2>
+    ${isEicLike(job) ? `<div class="card"><h2>B · Installation details (EIC)</h2>
       ${fld('eic.installType', 'Type of work', { type: 'seg', options: ['New installation', 'Addition', 'Alteration'] })}
       ${fld('eic.description', 'Description of installation', { type: 'textarea' })}
       ${fld('extent.covered', 'Extent covered by this certificate', { type: 'textarea' })}
@@ -295,8 +360,9 @@ const VIEWS = {
       <div class="row3">${fld('origin.msRcdType', 'If RCD: type', { list: ['AC', 'A', 'F', 'B', 'S', 'A-S'] })}${fld('origin.msIdn', 'IΔn (mA)', { type: 'num' })}${fld('origin.msRcdTime', 'Time (ms)', { type: 'num' })}</div></div>`;
     bindFields(main, job);
   },
+  ev() { evView(); },
   inspection() {
-    if (kindOf(job) === 'eic') return eicInspection();
+    if (isEicLike(job)) return eicInspection();
     fresh();
     const insp = job.inspection;
     const outs = id => (id.startsWith('1.') ? ['✓', 'X', 'N/A', 'LIM', 'N/V', 'C1'] : ['✓', 'N/A', 'LIM', 'N/V', 'C1', 'C2', 'C3', 'FI']);
@@ -390,7 +456,7 @@ const VIEWS = {
     fresh();
     const a = overallAssessment(job); const cc = codeCounts(job);
     const d = job.declaration;
-    if (kindOf(job) === 'eic') {
+    if (isEicLike(job)) {
       job.eic ??= {};
       const e = job.eic;
       const sigImgE = d.inspector.useSaved && settings.inspector.signature ? settings.inspector.signature : d.inspector.signature;
@@ -631,7 +697,7 @@ function markRow(tr, c, b) {
 function markRows(b) { main.querySelectorAll('table.ct tbody tr').forEach(tr => markRow(tr, b.circuits[+tr.dataset.r], b)); }
 
 // ---------- AI board photo import ----------
-const APP_VERSION = '1.8.0';
+const APP_VERSION = '1.9.0';
 const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`${what} timed out after ${ms / 1000} s`)), ms))]);
 function drawToJpeg(src, w, h, max, q) {
   const s = Math.min(1, max / Math.max(w, h)); const cv = document.createElement('canvas');

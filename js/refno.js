@@ -25,7 +25,7 @@ export function planRestore(settings, existing, incoming, date = new Date()) {
   const order = [...incoming.keys()].sort((x, y) => (existing.some(e => e.id === incoming[y].id) ? 1 : 0) - (existing.some(e => e.id === incoming[x].id) ? 1 : 0));
   const out = []; for (const idx of order) out[idx] = ((j) => {
     let jj = j;
-    if (!normRef(j.reportNo) || isDuplicate(j.reportNo, all)) { const code = (j.kind === 'eic' ? 'EIC' : j.kind === 'mw' ? 'MW' : 'EICR'); const a = allocateRef(s, [...all, ...incoming], date, code); renamed.push([j.reportNo, a.ref]); jj = { ...j, reportNo: a.ref, refLocked: false }; s = { ...s, nextNumber: a.next }; }
+    if (!normRef(j.reportNo) || isDuplicate(j.reportNo, all)) { const code = ({ eic: 'EIC', mw: 'MW', ev: 'EV' })[j.kind] || 'EICR'; const a = allocateRef(s, [...all, ...incoming], date, code); renamed.push([j.reportNo, a.ref]); jj = { ...j, reportNo: a.ref, refLocked: false }; s = { ...s, nextNumber: a.next }; }
     all.push(jj); return jj;
   })(incoming[idx]);
   return { jobs: out, nextNumber: s.nextNumber, renamed };

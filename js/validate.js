@@ -1,4 +1,4 @@
-import { EDITIONS, CODES, INSPECTION_ITEMS } from './presets.js';
+import { EDITIONS, CODES, INSPECTION_ITEMS, evPmeRisk } from './presets.js';
 import { tableMaxZs, zsLimit } from './zs.js';
 
 /** Parse test readings like "0.45", ">999", "≥200", "LIM", "N/A". Returns {n, gt, text}. */
@@ -128,13 +128,28 @@ export function validateJob(job, settings = {}) {
   req(job.reportNo, 'Report', 'Report number missing', 'client');
   req(job.client?.name, 'A Client', 'Name of person ordering the report missing', 'client');
   req(job.client?.address, 'A Client', 'Address of person ordering the report missing', 'client');
-  const kind = ['eic', 'mw'].includes(job.kind) ? job.kind : 'eicr';
+  const kind = ['eic', 'mw', 'ev'].includes(job.kind) ? job.kind : 'eicr';
   const isR = kind === 'eicr';
   if (isR) {
   req(job.reason, 'B Reason', 'Reason for producing the report missing', 'client');
   req(job.inspDates, 'B Reason', 'Date(s) of inspection missing', 'client');
   }
-  if (kind === 'eic') { req(job.eic?.installType, 'B Installation', 'Type of work (new/addition/alteration) missing', 'client'); req(job.eic?.description, 'B Installation', 'Description of installation missing', 'client'); }
+  if (kind === 'ev') {
+    const v = job.ev || {};
+    req(v.make, 'EV charger', 'Charger make missing', 'ev'); req(v.model, 'EV charger', 'Charger model missing', 'ev'); req(v.serial, 'EV charger', 'Charger serial number missing', 'ev');
+    req(v.pmeMethod, 'EV charger', 'Earthing / PME method (722.411.4.1) not recorded', 'ev');
+    if (evPmeRisk(job)) add('error', 'EV charger', 'PME supply used without a permitted open-PEN method (722.411.4.1) – fit/confirm open-PEN protection or TT the charger', 'ev');
+    if (/^TT|\(b\)/.test(v.pmeMethod || '') || job.supply?.earthing === 'TT') { req(v.electrodeRa, 'EV charger', 'Earth electrode resistance Ra missing', 'ev'); if (num(v.electrodeRa) > 200) add('warn', 'EV charger', `Electrode Ra ${v.electrodeRa} Ω above 200 Ω may be unstable`, 'ev'); }
+    req(v.rcdType, 'EV charger', 'RCD / DC fault protection type (722.531.3.101) missing', 'ev');
+    if (/^Type AC/i.test(v.rcdType || '')) add('error', 'EV charger', 'Type AC RCD not permitted for EV charging', 'ev');
+    if (num(v.vdPct) > 5) add('warn', 'EV charger', `Voltage drop ${v.vdPct}% exceeds 5%`, 'ev');
+    if (num(v.maxDemandA) != null && num(v.supplyFuseA) != null && num(v.maxDemandA) > num(v.supplyFuseA) && !/CT|limit|upgrade/i.test(v.loadMgmt || '')) add('error', 'EV charger', `Max demand ${v.maxDemandA} A exceeds supply fuse ${v.supplyFuseA} A with no load management`, 'ev');
+    req(v.dnoMethod, 'EV charger', 'DNO notification method missing', 'ev');
+    if (/notify|apply/i.test(v.dnoMethod || '') && !v.dnoDate) add('warn', 'EV charger', 'DNO notification date not recorded', 'ev');
+    if (!v.smartCompliant) add('warn', 'EV charger', 'Smart Charge Points Regulations 2021 compliance not confirmed', 'ev');
+    if (!v.handover) add('warn', 'EV charger', 'Customer handover not confirmed', 'ev');
+  }
+  if (kind === 'eic' || kind === 'ev') { req(job.eic?.installType, 'B Installation', 'Type of work (new/addition/alteration) missing', 'client'); req(job.eic?.description, 'B Installation', 'Description of installation missing', 'client'); }
   if (kind === 'mw') {
     req(job.mw?.description, 'A Minor works', 'Description of the minor works missing', 'client');
     req(job.mw?.completed, 'A Minor works', 'Date minor works completed missing', 'client');

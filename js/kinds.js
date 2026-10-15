@@ -6,6 +6,11 @@ export const KINDS = {
     tabs: ['client', 'extent', 'supply', 'inspection', 'boards', 'summary', 'check'] },
   mw: { label: 'Minor Works', full: 'Minor Electrical Installation Works Certificate', ref: 'MW',
     tabs: ['client', 'supply', 'boards', 'summary', 'check'], maxCircuits: 4 },
+  ev: { label: 'EV Charger', full: 'Electrical Installation Certificate – EV Charging Equipment', ref: 'EV',
+    tabs: ['client', 'extent', 'supply', 'ev', 'inspection', 'boards', 'summary', 'check'] },
 };
+/** EIC-based kinds (full EIC body, sections A–J). */
+export const isEicLike = j => ['eic', 'ev'].includes(kindOf(j));
+export const refCode = kind => (KINDS[kind] || KINDS.eicr).ref;
 export const kindOf = j => KINDS[j?.kind] ? j.kind : 'eicr';
 export const kindMeta = j => KINDS[kindOf(j)];

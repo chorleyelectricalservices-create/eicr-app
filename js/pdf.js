@@ -1,6 +1,6 @@
 // PDF report generator. Works in the browser (window.jspdf.jsPDF + autotable plugin)
 // and in Node (jspdf + jspdf-autotable applyPlugin) – caller supplies the jsPDF class.
-import { EDITIONS, INSPECTION_GROUPS, WIRING_TYPES, EIC_ITEMS } from './presets.js';
+import { EDITIONS, INSPECTION_GROUPS, WIRING_TYPES, EIC_ITEMS, evPmeRisk } from './presets.js';
 import { overallAssessment, sortObservations, circuitMaxZs } from './validate.js';
 
 const DARK = [1, 38, 77], ACCENT = [1, 38, 77], ORANGE = [243, 146, 0], LIGHT = [241, 245, 249], RED = [185, 28, 28], GREEN = [21, 128, 61];
@@ -143,7 +143,7 @@ export function buildReport(jsPDF, job, settings) {
     doc.text(`Page ${i} of ${n}`, w - M, h - 6, { align: 'right' });
   }
   }
-  if (job.kind === 'eic') return eicBody();
+  if (job.kind === 'eic' || job.kind === 'ev') return eicBody();
   if (job.kind === 'mw') return mwBody();
   if (job.kind === 'sched') return schedBody();
   // ---------- Page 1 ----------
@@ -362,7 +362,7 @@ export function buildReport(jsPDF, job, settings) {
 
   // ================= EIC =================
   function eicBody() {
-    setHdr({ title: 'ELECTRICAL INSTALLATION CERTIFICATE', noLabel: 'Certificate No' });
+    setHdr({ title: job.kind === 'ev' ? 'ELECTRICAL INSTALLATION CERTIFICATE – EV CHARGING EQUIPMENT' : 'ELECTRICAL INSTALLATION CERTIFICATE', noLabel: 'Certificate No' });
     header(_hdr); const amended = fmtDate(ed.amendedTo);
     const e = job.eic || {}; const ins = job.installation || {};
     note('Requirements for electrical installations – ' + ed.label.replace(/ \(.*\)/, '') + '. Original to the person ordering the work; duplicate retained by the contractor.', 6.5);
@@ -412,6 +412,7 @@ export function buildReport(jsPDF, job, settings) {
     section('SECTION J: SCHEDULES');
     const nb = job.boards?.length || 0;
     note(`Attached: Schedule of Inspections (Section H); ${nb} Schedule(s) of Circuit Details and Test Results. The schedules and continuation sheets listed are part of this document and this certificate is valid only when they are attached to it.`);
+    if (job.kind === 'ev') evSupplement();
     boardSchedules({ name: e.inspection?.name || job.declaration?.inspector?.name, date: e.inspection?.date });
     guidance([
       'This certificate has been issued to confirm that the electrical installation work to which it relates has been designed, constructed, inspected and tested in accordance with BS 7671.',
@@ -422,6 +423,37 @@ export function buildReport(jsPDF, job, settings) {
       ...commonGuide(),
     ]);
     footers(); return doc;
+  }
+
+  function evSupplement() {
+    const v = job.ev || {}; const yn = b => (b ? 'Yes' : 'No');
+    newPage();
+    section('EV CHARGING EQUIPMENT SUPPLEMENT (BS 7671 Section 722 / IET Code of Practice)');
+    note(`Supplement to Certificate No ${job.reportNo || ''}. Forms part of this certificate.`, 7);
+    section('1. CHARGING EQUIPMENT');
+    kv([['Make', v.make, 'Model', v.model], ['Serial no', v.serial, 'Rated power', v.powerKw ? v.powerKw + ' kW' : ''],
+      ['Charging mode', v.mode, 'Outlet', v.outlet], ['Connector', v.connector, 'Supply', v.phases],
+      ['Location', v.location, 'IP / IK rating', [v.ipRating, v.ikRating].filter(Boolean).join(' / ')]]);
+    section('2. EARTHING AND PME (Reg 722.411.4.1)');
+    kv([['Supply earthing', job.supply?.earthing, 'Method used', v.pmeMethod],
+      ['Device details', { content: v.pmeNotes, colSpan: 3 }],
+      ['Electrode type', v.electrodeType, 'Electrode Ra (Ω)', v.electrodeRa], ['Electrode location', { content: v.electrodeLocation, colSpan: 3 }]]);
+    if (evPmeRisk(job)) note('WARNING: PME earthing recorded without a permitted 722.411.4.1 method – review before issue.', 7.5);
+    section('3. PROTECTION');
+    kv([['RCD / DC fault protection', { content: v.rcdType, colSpan: 3 }], ['RCD IΔn', v.rcdIdn ? v.rcdIdn + ' mA' : '', 'Protective device', [v.deviceBsen && 'BS EN ' + v.deviceBsen, v.deviceType && 'Type ' + v.deviceType, v.deviceRating && v.deviceRating + ' A'].filter(Boolean).join(' ')]]);
+    section('4. CIRCUIT CABLE');
+    kv([['Cable type', v.cableType, 'Live / cpc csa', [v.cableCsa, v.cpcCsa].filter(Boolean).join(' / ') + ((v.cableCsa || v.cpcCsa) ? ' mm²' : '')],
+      ['Length', v.cableLength ? v.cableLength + ' m' : '', 'Reference method', v.refMethod], ['Route', v.cableRoute, 'Voltage drop', v.vdPct ? v.vdPct + ' %' : '']]);
+    section('5. MAXIMUM DEMAND AND LOAD MANAGEMENT');
+    kv([['Supply fuse', v.supplyFuseA ? v.supplyFuseA + ' A' : '', 'Max demand incl. EV', v.maxDemandA ? v.maxDemandA + ' A' : ''],
+      ['Load management', v.loadMgmt, 'CT clamp verified', yn(v.ctClamp)], ['Assessment', { content: v.admdNotes, colSpan: 3 }]]);
+    section('6. DNO NOTIFICATION');
+    kv([['Method', v.dnoMethod, 'DNO', v.dno], ['Date', fmtDate(v.dnoDate), 'Reference', v.dnoRef]]);
+    section('7. SMART CHARGE POINT (Electric Vehicles (Smart Charge Points) Regulations 2021)');
+    kv([['Compliant charger', yn(v.smartCompliant), 'Off-peak default hours', yn(v.offPeakDefault)], ['Randomised delay', yn(v.randomDelay), 'Notes', v.smartNotes]]);
+    section('8. COMMISSIONING AND HANDOVER');
+    kv([['Commissioned / test charge', yn(v.commissioned), 'Connectivity', v.wifiApp], ['Firmware', v.firmware, 'Photos on file', yn(v.photos)],
+      ['Customer shown operation', yn(v.customerShown), 'Instructions left', yn(v.manualsLeft)], ['Handover complete', yn(v.handover), 'Notes', v.notes]]);
   }
 
   // ================= MINOR WORKS =================

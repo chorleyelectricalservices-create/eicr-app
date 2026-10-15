@@ -86,6 +86,33 @@ export function newEic(settings = defaultSettings()) {
   j.reason = ''; // unused
   return j;
 }
+/** EV charge point: EIC (new circuit) + EV supplement (BS 7671 Section 722, IET CoP EV). */
+export function newEv(settings = defaultSettings()) {
+  const j = newEic(settings);
+  j.kind = 'ev';
+  j.eic.description = 'Installation of a new dedicated circuit and electric vehicle charging point (Mode 3)';
+  j.extent.covered = 'New EV charging point circuit from the consumer unit to the charge point, including the charge point.';
+  j.ev = newEvSupplement();
+  j.boards[0].circuits = [newCircuit(1, { desc: 'EV charger', bsen: '61009', type: 'B', rating: '32', points: '1' })];
+  return j;
+}
+export function newEvSupplement() {
+  return {
+    make: '', model: '', serial: '', powerKw: '7.4', mode: 'Mode 3', outlet: 'Tethered', connector: 'Type 2', phases: 'Single phase',
+    location: 'Outdoor – wall mounted', ipRating: '', ikRating: '',
+    pmeMethod: '', // see EV_PME_OPTIONS
+    pmeNotes: '', electrodeType: '', electrodeRa: '', electrodeLocation: '',
+    rcdType: '', rcdIdn: '30', rddc: '', // RDC-DD built in?
+    deviceBsen: '61009', deviceType: 'B', deviceRating: '32',
+    cableType: '', cableCsa: '6', cpcCsa: '', cableLength: '', refMethod: '', cableRoute: '',
+    vdPct: '', maxDemandA: '', supplyFuseA: '', admdNotes: '', loadMgmt: '', ctClamp: false,
+    dnoMethod: '', dnoDate: '', dnoRef: '', dno: '',
+    smartCompliant: false, offPeakDefault: false, randomDelay: false, smartNotes: '',
+    commissioned: false, wifiApp: '', firmware: '',
+    handover: false, manualsLeft: false, customerShown: false,
+    photos: false, notes: '',
+  };
+}
 export function newMw(settings = defaultSettings()) {
   const j = newJob(settings);
   j.kind = 'mw';
