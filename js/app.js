@@ -10,6 +10,8 @@ import { allocateRef, planRestore, isDuplicate, maxRefNum, DEFAULT_REF_PREFIX, c
 import { planDomestic, markTyp, DEFAULT_RULES_TEXT } from './domestic.js';
 import { ai, AI_TIMEOUT_MS, aiCfg, PROVIDERS, getKey, setKey, planImport, markImported, boardPlan } from './ai.js';
 import { parseDictation, FIELD_LABELS } from './voice.js';
+import { fieldKind, normaliseForField, formatPostcode } from './fieldvoice.js';
+import { ADDR_PROVIDERS, getAddrKey, setAddrKey, lookupPostcode, formatAddress } from './address.js';
 import { boardZe, calcR1R2, calcZs, planCalcAll, markCalc } from './calc.js';
 import { planFill, applyFill, COMMON_VALUES, isSpare } from './fill.js';
 import { suggestItems, recalcSchedule, migrate, linkedObs, setItemOutcome, itemText, displayId } from './links.js';
@@ -196,6 +198,40 @@ async function renderJobs() {
 }
 function downloadBlob(blob, name) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000); }
 
+// ---------- postcode → address lookup ----------
+function addrLookupHtml(sec) {
+  const pc = job[sec]?.postcode || '';
+  return `<div class="addrlk" data-sec="${sec}"><div class="row" style="align-items:flex-end">
+    <label class="f"><span>Postcode</span><input data-p="${sec}.postcode" data-kind="postcode" autocapitalize="characters" autocomplete="postal-code" value="${esc(pc)}" placeholder="e.g. PR7 1AB"></label>
+    <button class="btn" type="button" data-alk="${sec}" style="margin-bottom:12px">🔎 Find address</button></div>
+    <div class="alres" id="alres-${sec}"></div></div>`;
+}
+function bindAddrLookup(sec) {
+  const btn = main.querySelector(`[data-alk="${sec}"]`); if (!btn) return;
+  const inp = main.querySelector(`[data-p="${sec}.postcode"]`);
+  const run = () => doAddrLookup(sec, inp.value);
+  btn.onclick = run;
+  inp.addEventListener('change', () => { const f = formatPostcode(inp.value); if (f && f !== inp.value) { inp.value = f; job[sec].postcode = f; scheduleSave(); } if (f) run(); });
+  inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); run(); } });
+}
+async function doAddrLookup(sec, pc) {
+  const box = $(`#alres-${sec}`); if (!box) return;
+  const prov = settings.addrProvider || ''; const key = prov ? getAddrKey(prov) : '';
+  box.innerHTML = '<p class="muted">Looking up…</p>';
+  const r = await lookupPostcode(pc, { provider: prov, key });
+  if (!r.ok) { box.innerHTML = `<p class="issue warn" style="display:block">${esc(r.error)}</p>`; return; }
+  job[sec].postcode = r.postcode; const inp = main.querySelector(`[data-p="${sec}.postcode"]`); if (inp) inp.value = r.postcode; scheduleSave();
+  const town = r.info?.town || '', county = r.info?.county || '';
+  const list = r.addresses.length ? `<label class="f"><span>Choose address (${r.addresses.length})</span><select id="alsel-${sec}"><option value="">— select —</option>${r.addresses.map((a, i) => `<option value="${i}">${esc(a.label)}</option>`).join('')}</select></label>` : '';
+  box.innerHTML = `${r.info ? `<p class="muted">✓ ${esc(r.postcode)} · ${esc([town, county].filter(Boolean).join(', '))}</p>` : `<p class="muted">Couldn't check the postcode (offline?) – type the address.</p>`}
+    ${r.error ? `<p class="muted">${esc(r.error)} – type the house number instead.</p>` : ''}${list}
+    ${!r.addresses.length ? `<div class="row" style="align-items:flex-end"><label class="f"><span>House no. / name</span><input id="alhouse-${sec}" placeholder="e.g. 12"></label><label class="f"><span>Street</span><input id="alstreet-${sec}" placeholder="Street"></label>
+      <button class="btn pri" type="button" id="alfill-${sec}" style="margin-bottom:12px">Fill</button></div>${!prov || !key ? '<p class="muted">Tip: add a free-trial address key in Settings to pick from a house list.</p>' : ''}` : ''}`;
+  const set = text => { job[sec].address = text; scheduleSave(); VIEWS.client(); toast('Address filled'); };
+  $(`#alsel-${sec}`) && ($(`#alsel-${sec}`).onchange = e => { const a = r.addresses[+e.target.value]; if (a) set(formatAddress({ lines: a.lines, town: a.town || town, county: a.county || county, postcode: a.postcode || r.postcode })); });
+  $(`#alfill-${sec}`) && ($(`#alfill-${sec}`).onclick = () => set(formatAddress({ house: $(`#alhouse-${sec}`).value.trim(), street: $(`#alstreet-${sec}`).value.trim(), town, county, postcode: r.postcode })));
+}
+
 // ---------- job views ----------
 function evView() {
   fresh();
@@ -278,7 +314,7 @@ const VIEWS = {
     fresh();
     main.innerHTML = `
     <div class="card"><h2>Report</h2>${job.refLocked ? `<label class="f"><span>Report reference 🔒</span><input value="${esc(job.reportNo)}" readonly style="background:#f1f5f9"></label><p class="muted">Locked because a PDF has been made${job.status === 'issued' ? '/issued' : ''}. <button class="btn" id="chgRef">Change reference…</button></p>` : `<label class="f"><span>Report reference</span><input id="refIn" value="${esc(job.reportNo)}"></label>`}${fld('edition', 'Edition', { type: 'select', options: Object.entries(EDITIONS).map(([k, v]) => [k, v.label]) })}</div>
-    <div class="card"><h2>A · Person ordering the report</h2>${fld('client.name', 'Name')}${fld('client.address', 'Address', { type: 'textarea' })}</div>
+    <div class="card"><h2>A · Person ordering the report</h2>${fld('client.name', 'Name')}${addrLookupHtml('client')}${fld('client.address', 'Address', { type: 'textarea' })}</div>
     ${kindOf(job) === 'eicr' ? `<div class="card"><h2>B · Reason for the report</h2>${fld('reason', 'Reason', { list: ['Periodic inspection', 'Change of tenancy', 'Landlord requirement (5-yearly)', 'Sale of property', 'Purchase survey', 'Mortgage / insurance requirement', 'Change of occupancy'] })}
       ${fld('inspDates', 'Date(s) of inspection', { type: 'date' })}</div>` : ''}
     ${isEicLike(job) ? `<div class="card"><h2>B · Installation details (EIC)</h2>
@@ -299,7 +335,7 @@ const VIEWS = {
       ${fld('mw.riskAssessment', 'Risk assessment attached', { type: 'check' })}
       ${fld('mw.commentsExisting', 'Comments on existing installation (incl. defects observed)', { type: 'textarea' })}</div>` : ''}
     <div class="card"><h2>${kindOf(job) === 'eicr' ? 'C · Installation' : 'Installation'}</h2>${kindOf(job) === 'eicr' ? fld('installation.occupier', 'Occupier') : ''}
-      ${fld('installation.address', 'Installation address', { type: 'textarea' })}
+      ${addrLookupHtml('installation')}${fld('installation.address', 'Installation address', { type: 'textarea' })}
       <button class="btn" id="sameAddr">Same as client address</button><br><br>
       ${fld('installation.premises', 'Description of premises', { type: 'seg', options: ['Residential', 'Commercial', 'Industrial', 'Other'] })}
       ${fld('installation.premisesOther', 'If other, describe')}
@@ -316,7 +352,8 @@ const VIEWS = {
       if (isDuplicate(v.trim(), await db.allJobs(), job.id)) return alert(`${v.trim()} is already used by another report on this phone.`);
       (job.refHistory ??= []).push({ from: job.reportNo, to: v.trim(), at: new Date().toISOString() }); job.reportNo = v.trim(); scheduleSave(); refreshHeader(); VIEWS.client(); });
     bindFields(main, job, p => { if (p === 'reportNo' || p.startsWith('installation.address')) refreshHeader(); });
-    $('#sameAddr').onclick = () => { job.installation.address = job.client.address; scheduleSave(); VIEWS.client(); };
+    $('#sameAddr').onclick = () => { job.installation.address = job.client.address; job.installation.postcode = job.client.postcode || ''; scheduleSave(); VIEWS.client(); };
+    bindAddrLookup('client'); bindAddrLookup('installation');
   },
   extent() {
     fresh();
@@ -697,7 +734,7 @@ function markRow(tr, c, b) {
 function markRows(b) { main.querySelectorAll('table.ct tbody tr').forEach(tr => markRow(tr, b.circuits[+tr.dataset.r], b)); }
 
 // ---------- AI board photo import ----------
-const APP_VERSION = '1.9.0';
+const APP_VERSION = '1.10.0';
 const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`${what} timed out after ${ms / 1000} s`)), ms))]);
 function drawToJpeg(src, w, h, max, q) {
   const s = Math.min(1, max / Math.max(w, h)); const cv = document.createElement('canvas');
@@ -831,6 +868,11 @@ function renderSettings() {
     <label class="f"><span>${PROVIDERS[aiCfg(settings).provider].label} API key</span><input id="aiKey" type="password" autocomplete="off" placeholder="paste key" value="${esc(getKey(aiCfg(settings).provider))}"></label>
     <p class="muted"><a href="${PROVIDERS[aiCfg(settings).provider].keyUrl}" target="_blank" rel="noopener">Get a key ↗</a>${aiCfg(settings).provider === 'gemini' ? ' (free – sign in with Google, tap “Create API key”)' : ' (paid account)'}</p>
     <label class="f"><span>Model (blank = ${PROVIDERS[aiCfg(settings).provider].defaultModel})</span><input id="aiModel" placeholder="${PROVIDERS[aiCfg(settings).provider].defaultModel}" value="${esc(settings.ai?.model || '')}"></label></div>
+  <div class="card"><h2>Address lookup</h2>
+    <p class="muted">Postcodes are always checked free with postcodes.io (fills town/county). For a list of house addresses, add a key from a provider below – kept only on this phone.</p>
+    <label class="f"><span>House-level provider</span></label><div class="seg" id="addrProv" style="margin-bottom:12px"><button type="button" data-ap="" class="${!settings.addrProvider ? 'on' : ''}">None</button>${Object.entries(ADDR_PROVIDERS).map(([k, v]) => `<button type="button" data-ap="${k}" class="${settings.addrProvider === k ? 'on' : ''}">${v.label}</button>`).join('')}</div>
+    ${settings.addrProvider ? `<label class="f"><span>${ADDR_PROVIDERS[settings.addrProvider].label} key</span><input id="addrKey" type="password" autocomplete="off" placeholder="${ADDR_PROVIDERS[settings.addrProvider].keyHint}" value="${esc(getAddrKey(settings.addrProvider))}"></label>
+    <p class="muted"><a href="${ADDR_PROVIDERS[settings.addrProvider].signup}" target="_blank" rel="noopener">Start free trial ↗</a> (no card needed)</p>` : ''}</div>
   <div class="card"><h2>Domestic defaults</h2>
     <p class="muted">Used by “🏠 Domestic defaults” and after photo import. Only fills empty boxes. One rule per line, first match wins:<br><code>words in description | ratings A (e.g. 6 or 40-50) | live/cpc mm² | wiring code | ref method</code><br>Max Zs is filled automatically from the BS 7671 tables from device type/curve/rating.</p>
     <textarea id="domTxt" style="min-height:220px;font-size:13px;font-family:monospace">${esc(settings.domesticRules || DEFAULT_RULES_TEXT)}</textarea>
@@ -847,6 +889,8 @@ function renderSettings() {
   bindFields(main, settings);
   $('#aiProv').onclick = async e => { const t = e.target.closest('[data-prov]'); if (!t) return; settings.ai = { provider: t.dataset.prov, model: '' }; await saveSettings(); const y = scrollY; renderSettings(); scrollTo(0, y); };
   $('#aiKey').onchange = e => { setKey(aiCfg(settings).provider, e.target.value); toast(e.target.value.trim() ? 'Key saved on this phone' : 'Key removed'); };
+  $('#addrProv').onclick = async e => { const t = e.target.closest('[data-ap]'); if (!t) return; settings.addrProvider = t.dataset.ap; await saveSettings(); const y = scrollY; renderSettings(); scrollTo(0, y); };
+  $('#addrKey') && ($('#addrKey').onchange = e => { setAddrKey(settings.addrProvider, e.target.value); toast(e.target.value.trim() ? 'Key saved on this phone' : 'Key removed'); });
   $('#aiModel').onchange = async e => { settings.ai = { ...aiCfg(settings), model: e.target.value.trim() }; await saveSettings(); };
   $('#logo').onchange = async e => { const f = e.target.files[0]; if (!f) return; settings.contractor.logo = await shrinkImage(f, 600, 280); await saveSettings(); renderSettings(); };
   $('#rmLogo') && ($('#rmLogo').onclick = async () => { settings.contractor.logo = ''; settings.contractor.logoRemoved = true; await saveSettings(); renderSettings(); });
@@ -1050,3 +1094,39 @@ function signaturePad(done) {
   route();
   if (location.search.includes('debug')) window.__eicr = { get job() { return job; }, get settings() { return settings; }, db, dictate: t => handleTranscript(t) };
 })();
+
+// ---------- per-field dictation (🎤 next to the focused box) ----------
+const FMIC_SKIP = /^(checkbox|radio|date|time|datetime-local|file|password|range|color|button|submit|hidden)$/;
+let fmicEl = null, fmicBtn = null;
+function fmicSetup() {
+  if (!SR) return; // keyboard mic still works
+  fmicBtn = document.createElement('button'); fmicBtn.type = 'button'; fmicBtn.id = 'fmic'; fmicBtn.textContent = '🎤'; fmicBtn.title = 'Dictate into this box';
+  fmicBtn.style.cssText = 'position:fixed;z-index:50;display:none;width:40px;height:40px;border-radius:20px;border:0;background:#0f766e;color:#fff;font-size:20px;box-shadow:0 2px 6px rgba(0,0,0,.3)';
+  document.body.appendChild(fmicBtn);
+  const place = () => { if (!fmicEl || !document.contains(fmicEl)) { fmicBtn.style.display = 'none'; return; }
+    const r = fmicEl.getBoundingClientRect(); fmicBtn.style.top = Math.max(4, r.top + Math.min(r.height, 44) / 2 - 20) + 'px'; fmicBtn.style.left = Math.min(innerWidth - 44, r.right - 44) + 'px'; fmicBtn.style.display = 'block'; };
+  document.addEventListener('focusin', e => { const el = e.target; if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) || FMIC_SKIP.test(el.type) || el.readOnly || el.disabled || el.closest('#modal')) return; fmicEl = el; place(); });
+  document.addEventListener('focusout', () => setTimeout(() => { if (document.activeElement !== fmicEl && !fmicBtn.dataset.on) fmicBtn.style.display = 'none'; }, 150));
+  addEventListener('scroll', () => fmicEl && fmicBtn.style.display === 'block' && place(), { passive: true }); addEventListener('resize', place);
+  fmicBtn.addEventListener('pointerdown', e => e.preventDefault()); // keep focus in the field
+  fmicBtn.onclick = () => fieldDictate(fmicEl);
+}
+function fieldDictate(el) {
+  if (!el) return; if (!navigator.onLine) return toast('Voice needs signal – use the keyboard mic');
+  const kind = fieldKind(el); const rec = new SR(); rec.lang = 'en-GB'; rec.interimResults = false; rec.maxAlternatives = 1;
+  fmicBtn.dataset.on = '1'; fmicBtn.textContent = '⏺'; fmicBtn.style.background = '#dc2626';
+  const stop = () => { delete fmicBtn.dataset.on; fmicBtn.textContent = '🎤'; fmicBtn.style.background = '#0f766e'; };
+  rec.onresult = e => { const raw = e.results[0][0].transcript; insertDictated(el, normaliseForField(kind, raw), kind); };
+  rec.onerror = e => { stop(); toast(e.error === 'not-allowed' ? 'Microphone blocked – allow it in Chrome settings' : e.error === 'no-speech' ? 'Didn’t hear anything' : 'Voice error: ' + e.error); };
+  rec.onend = stop;
+  try { rec.start(); } catch (err) { stop(); toast('Could not start the mic'); }
+}
+function insertDictated(el, text, kind) {
+  if (!text) return;
+  const replace = kind !== 'text' || !el.value || el.selectionStart !== el.selectionEnd;
+  if (replace && el.selectionStart === el.selectionEnd) el.value = text;
+  else { const a = el.selectionStart ?? el.value.length, b = el.selectionEnd ?? el.value.length; const pre = el.value.slice(0, a); const sep = pre && !/[\s\n]$/.test(pre) ? ' ' : '';
+    el.value = pre + sep + text + el.value.slice(b); const c = (pre + sep + text).length; try { el.setSelectionRange(c, c); } catch {} }
+  el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true }));
+}
+fmicSetup();

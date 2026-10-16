@@ -43,9 +43,9 @@ export function newJob(settings = defaultSettings()) {
   return {
     id: uid(), created: Date.now(), updated: Date.now(), status: 'draft', kind: 'eicr', edition: DEFAULT_EDITION,
     reportNo: `${s.reportPrefix || ''}${String(s.nextNumber || 1).padStart(4, '0')}`,
-    client: { name: '', address: '' },
+    client: { name: '', address: '', postcode: '' },
     reason: '', inspDates: d,
-    installation: { occupier: '', address: '', premises: 'Residential', premisesOther: '', wiringAge: '', alterations: '', alterationsAge: '', records: '', lastInspection: '' },
+    installation: { occupier: '', address: '', postcode: '', premises: 'Residential', premisesOther: '', wiringAge: '', alterations: '', alterationsAge: '', records: '', lastInspection: '' },
     extent: { covered: 'Whole installation', limitations: '', agreedWith: '', operational: '' },
     summary: { general: '' },
     next: { intervalYears: String(s.defaultInterval || 5), date: addYears(d, s.defaultInterval || 5), reasons: '' },
