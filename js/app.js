@@ -107,7 +107,7 @@ async function route() {
     renderSettings();
   } else {
     if (job) { await db.putJob(job); job = null; }
-    $('#topTitle').textContent = 'Cert Pad'; $('#topSub').textContent = 'EICR · EIC · Minor Works'; saved('');
+    $('#topTitle').textContent = 'CertPad'; $('#topSub').textContent = 'EICR · EIC · EV · Minor Works'; saved('');
     renderJobs();
   }
 }
@@ -843,7 +843,7 @@ function renderSettings() {
     <textarea id="libTxt" style="min-height:200px;font-size:14px">${esc((settings.obsLibrary || OBS_LIBRARY).map(o => `${o.code} | ${o.reg} | ${o.desc} | ${(o.items || []).join(', ')}`).join('\n'))}</textarea>
     <div class="btns"><button class="btn pri" id="libSave">Save library</button><button class="btn" id="libReset">Reset to built-in</button></div></div>
   <div class="card"><h2>Demo</h2><button class="btn" id="sample">Load sample domestic job</button>
-    <p class="muted">EICR Pad v1 · data stored only on this device · works offline once opened.</p></div>`;
+    <p class="muted">CertPad v1 · data stored only on this device · works offline once opened.</p></div>`;
   bindFields(main, settings);
   $('#aiProv').onclick = async e => { const t = e.target.closest('[data-prov]'); if (!t) return; settings.ai = { provider: t.dataset.prov, model: '' }; await saveSettings(); const y = scrollY; renderSettings(); scrollTo(0, y); };
   $('#aiKey').onchange = e => { setKey(aiCfg(settings).provider, e.target.value); toast(e.target.value.trim() ? 'Key saved on this phone' : 'Key removed'); };

@@ -1,6 +1,6 @@
 {
-  "name": "EICR Pad – Chorley Electrical Services",
-  "short_name": "EICR Pad",
+  "name": "CertPad – Chorley Electrical Services",
+  "short_name": "CertPad",
   "description": "Electrical Installation Condition Reports on your phone, offline.",
   "start_url": "./#/",
   "scope": "./",
