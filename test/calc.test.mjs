@@ -49,3 +49,21 @@ test('calculate all: overwrite and include spares', () => {
 test('markCalc flag', () => {
   const c = {}; markCalc(c, 'r1r2', true); assert.deepEqual(c.calc, { r1r2: true }); markCalc(c, 'r1r2', false); assert.deepEqual(c.calc, {});
 });
+
+import { planCalcZsAll } from '../js/calc.js';
+test('calculate all Zs = Ze + R1+R2: fills empty only, skips no R1+R2, keeps typed Zs', () => {
+  const cs = [{ desc: 'Ring', r1r2: '0.31' }, { desc: 'Lights', r1r2: '0.555', zs: '' }, { desc: 'Cooker', r1r2: '' }, { desc: 'Shower', r1r2: '0.2', zs: '0.70' }, { desc: 'Spare' , r1r2: '0.4'}];
+  const p = planCalcZsAll(cs, '0.21');
+  assert.deepEqual(p.changes.map(c => [c.index, c.value]), [[0, '0.52'], [1, '0.77']]);
+  assert.equal(p.noR, 1); assert.equal(p.noZe, false);
+  const o = planCalcZsAll(cs, '0.21', { overwrite: true });
+  assert.ok(o.changes.some(c => c.index === 3 && c.value === '0.41' && c.old === '0.70'));
+});
+test('calculate all Zs: no Ze', () => {
+  const p = planCalcZsAll([{ desc: 'Ring', r1r2: '0.3' }], '');
+  assert.equal(p.noZe, true); assert.equal(p.changes.length, 0);
+});
+test('calculated Zs refreshes when previously calculated', () => {
+  const p = planCalcZsAll([{ desc: 'Ring', r1r2: '0.3', zs: '0.40', calc: { zs: true } }], '0.2');
+  assert.deepEqual(p.changes.map(c => c.value), ['0.50']);
+});

@@ -48,4 +48,21 @@ export function planCalcAll(circuits, ze, opts = {}) {
   return { changes, fills: changes.filter(x => !x.old).length, replaces: changes.filter(x => x.old).length, skipped, bad };
 }
 
+/** Plan "calculate all Zs = Ze + (R1+R2)" for a board. Only fills empty Zs unless overwrite. */
+export function planCalcZsAll(circuits, ze, opts = {}) {
+  const { overwrite = false, skipSpare = true } = opts;
+  const changes = []; let skipped = 0, bad = 0, noR = 0;
+  if (plain(ze) == null) return { changes, fills: 0, replaces: 0, skipped: circuits.length, bad: 0, noR: 0, noZe: true };
+  circuits.forEach((c, index) => {
+    if (skipSpare && isSpare(c)) { skipped++; return; }
+    const old = String(c.zs ?? '').trim();
+    if (old && !overwrite && !c.calc?.zs) { skipped++; return; }
+    const r = calcZs(c.r1r2, ze);
+    if (!r.ok) { if (String(c.r1r2 ?? '').trim()) bad++; else noR++; return; }
+    if (old === r.value) return;
+    changes.push({ index, old, value: r.value });
+  });
+  return { changes, fills: changes.filter(x => !x.old).length, replaces: changes.filter(x => x.old).length, skipped, bad, noR, noZe: false };
+}
+
 export function markCalc(c, field, on) { if (on) (c.calc ??= {})[field] = true; else if (c.calc) delete c.calc[field]; }

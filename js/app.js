@@ -12,7 +12,7 @@ import { ai, AI_TIMEOUT_MS, aiCfg, PROVIDERS, getKey, setKey, planImport, markIm
 import { parseDictation, FIELD_LABELS } from './voice.js';
 import { fieldKind, normaliseForField, formatPostcode } from './fieldvoice.js';
 import { ADDR_PROVIDERS, getAddrKey, setAddrKey, lookupPostcode, formatAddress } from './address.js';
-import { boardZe, calcR1R2, calcZs, planCalcAll, markCalc } from './calc.js';
+import { boardZe, calcZs, planCalcZsAll, markCalc } from './calc.js';
 import { planFill, applyFill, COMMON_VALUES, isSpare } from './fill.js';
 import { suggestItems, recalcSchedule, migrate, linkedObs, setItemOutcome, itemText, displayId } from './links.js';
 
@@ -614,7 +614,8 @@ function cell0(c, [k, , kind, opt], ci) {
   if (kind === 'cyc') return `<button class="cyc" data-cyc="${k}">${esc(v)}</button>`;
   if (kind === 'mz') { const m = circuitMaxZs(c); return `<input class="w2" data-c="maxZs" inputmode="decimal" placeholder="${m ?? '?'}" value="${c.maxZsManual ? esc(c.maxZs) : ''}" title="Leave blank to use BS 7671 table value">`; }
   const inp = `<input class="${opt}${c.calc?.[k] ? ' calcd' : ''}" data-c="${k}" ${kind === 'num' ? 'inputmode="decimal"' : ''} value="${esc(v)}">`;
-  if (k === 'r1r2' || k === 'zs') return `<div class="calcwrap">${inp}<button class="calcbtn" data-calc="${k}" aria-label="Calculate ${k === 'zs' ? 'Zs = Ze + (R1+R2)' : 'R1+R2 = Zs − Ze'}">=</button>${c.calc?.[k] ? '<span class="calctag">calc</span>' : ''}</div>`;
+  if (k === 'zs') return `<div class="calcwrap">${inp}<button class="calcbtn" data-calc="zs" aria-label="Calculate Zs = Ze + (R1+R2)">=</button>${c.calc?.zs ? '<span class="calctag">calc</span>' : ''}</div>`;
+  if (k === 'r1r2' && c.calc?.r1r2) return `<div class="calcwrap">${inp}<span class="calctag">calc</span></div>`;
   return inp;
 }
 function renderBoards() {
@@ -637,7 +638,7 @@ function renderBoards() {
     ${kindOf(job) === 'mw' ? '<p class="muted">Minor Works covers alterations to <b>existing</b> circuits only (up to 4 on this form). If you are adding a new circuit or replacing the board, start an EIC instead.</p>' : ''}
     <div class="btns"><button class="btn pri" id="dictate" style="font-size:17px">🎤 Dictate results</button><label class="btn" id="aiPhoto" style="font-size:17px;display:inline-flex;align-items:center">📷 Take photo<input type="file" id="aiFile" accept="image/*" capture="environment" hidden></label><label class="btn" id="aiGallery" style="font-size:17px;display:inline-flex;align-items:center">🖼️ Choose from gallery<input type="file" id="aiFileGal" accept="image/*" hidden></label>${voiceUndo.length ? '<button class="btn" id="undoDict">↶ Undo last dictation/fill</button>' : ''}</div>
     <div class="muted">Quick add:</div><div class="fillbar">${QUICK_CIRCUITS.map((q, i) => `<button class="btn" data-q="${i}">＋ ${esc(q.name)}</button>`).join('')}<button class="btn" data-q="-1">＋ Blank</button></div>
-    <div class="muted">Fill all rows:</div><div class="fillbar"><button class="btn" data-fill="polarity">Polarity ✓</button><button class="btn" data-fill="testV">IR 500 V</button><button class="btn" data-fill="ir">IR &gt;999</button><button class="btn" data-fill="rcdBtn">RCD btn ✓</button><button class="btn" data-fill="afddBtn">AFDD N/A</button><button class="btn" data-fill="bc">kA 6</button><button class="btn" id="domDef">🏠 Domestic defaults</button></div>
+    <div class="muted">Fill all rows:</div><div class="fillbar"><button class="btn" data-fill="polarity">Polarity ✓</button><button class="btn" data-fill="testV">IR 500 V</button><button class="btn" data-fill="ir">IR &gt;999</button><button class="btn" data-fill="rcdBtn">RCD btn ✓</button><button class="btn" data-fill="afddBtn">AFDD N/A</button><button class="btn" data-fill="bc">kA 6</button><button class="btn" id="calcZsAll">Σ Zs = Ze + (R1+R2)</button><button class="btn" id="domDef">🏠 Domestic defaults</button></div>
     <div class="tbl-wrap"><table class="ct"><thead>
       <tr class="grp"><th class="no" colspan="2">Circuit</th>${colGroups().map(g => `<th colspan="${g.n}"${g.label ? "" : " class=\"blank\""}><span class="gl">${esc(g.label)}</span></th>`).join('')}</tr>
       <tr class="hdr"><th class="no">No</th>${COLS.map((c, ci) => `<th${ci === 0 ? ' class="dsc"' : ''}>${c[1]}${c[2] === 'mz' ? '' : `<br><button class="fillcol" data-fillcol="${c[0]}" aria-label="Fill ${esc(c[1])} column">⬇</button>`}</th>`).join('')}</tr></thead>
@@ -689,18 +690,20 @@ function renderBoards() {
       }
       scheduleSave(); renderBoards(); toast('Filled empty cells'); return;
     }
+    if (t.id === 'calcZsAll') { fillColumnSheet(b, 'zs'); $('#fcalc')?.click(); return; }
     if (t.dataset.calc) {
       const tr = t.closest('tr'); const i = +tr.dataset.r; const c = b.circuits[i]; const k = t.dataset.calc;
       const ze = boardZe(job, currentBoard);
-      const r = k === 'r1r2' ? calcR1R2(c.zs, ze.value) : (String(c.zs ?? '').trim() && !c.calc?.zs ? { ok: false, error: 'Zs already measured – clear it first to calculate' } : calcZs(c.r1r2, ze.value));
-      if (!r.ok) { toast(r.error + (ze.note ? ` (${ze.note})` : ''), 3500); return; }
+      if (ze.value == null) { toast(`Can’t calculate Zs: ${ze.note || 'no Ze recorded'} – enter Ze on the Supply tab${ze.source === 'Zdb' ? ' or Zdb for this board' : ''}`, 5000); return; }
+      const r = calcZs(c.r1r2, ze.value);
+      if (!r.ok) { toast(r.error === 'No R1+R2 reading' ? 'Enter R1+R2 for this circuit first' : r.error, 3500); return; }
       const old = c[k];
-      if (String(old ?? '').trim() && String(old) !== r.value && !c.calc?.[k] && !confirm(`Replace ${k === 'zs' ? 'Zs' : 'R1+R2'} ${old} with calculated ${r.value}?`)) return;
+      if (String(old ?? '').trim() && String(old) !== r.value && !c.calc?.[k] && !confirm(`Zs ${old} was typed in. Replace it with calculated ${r.value} (${ze.source} ${ze.value} + R1+R2 ${c.r1r2})?`)) return;
       c[k] = r.value; markCalc(c, k, true);
       voiceUndo.push([{ obj: c, k, old }, { obj: c, k: 'calc', old: c.calc && { ...c.calc, [k]: undefined } }]);
       scheduleSave(); const y = scrollY; const sx = main.querySelector('.tbl-wrap')?.scrollLeft; renderBoards(); scrollTo(0, y); if (sx) main.querySelector('.tbl-wrap').scrollLeft = sx;
       flash([{ scope: 'circuit', index: i, field: k }]);
-      toast(`${k === 'zs' ? 'Zs' : 'R1+R2'} = ${r.value} (${k === 'zs' ? ze.source + ' + R1+R2' : 'Zs − ' + ze.source})${ze.note ? ' · ' + ze.note : ''}`, 5000, { label: 'Undo', fn: undoDictation });
+      toast(`Zs = ${ze.value} + ${c.r1r2} = ${r.value} (${ze.source} + R1+R2)${ze.note ? ' · ' + ze.note : ''}`, 5000, { label: 'Undo', fn: undoDictation });
       return;
     }
     if (t.dataset.fillcol) { fillColumnSheet(b, t.dataset.fillcol); return; }
@@ -741,7 +744,7 @@ function markRow(tr, c, b) {
 function markRows(b) { main.querySelectorAll('table.ct tbody tr').forEach(tr => markRow(tr, b.circuits[+tr.dataset.r], b)); }
 
 // ---------- AI board photo import ----------
-const APP_VERSION = '1.11.0';
+const APP_VERSION = '1.12.0';
 const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`${what} timed out after ${ms / 1000} s`)), ms))]);
 function drawToJpeg(src, w, h, max, q) {
   const s = Math.min(1, max / Math.max(w, h)); const cv = document.createElement('canvas');
@@ -947,15 +950,15 @@ function fillColumnSheet(b, field) {
     <label class="f"><span>Value</span><input id="fv" ${col && col[2] === 'num' ? 'inputmode="decimal"' : ''} autocomplete="off"></label>
     <div class="seg" id="fcom" style="margin-bottom:10px">${commons.map(v => `<button type="button" data-v="${esc(v)}">${esc(v)}</button>`).join('')}</div>
     <div class="btns">${fromRow(0) ? `<button class="btn" data-from="0">Copy from cct ${esc(cs[0].no)} (${esc(fromRow(0))})</button>` : ''}${sel != null && fromRow(sel) ? `<button class="btn" data-from="${sel}">Copy from selected cct ${esc(cs[sel].no)} (${esc(fromRow(sel))})</button>` : ''}</div>
-    ${field === 'r1r2' ? `<button class="btn big" id="fcalc">Σ Calculate all from Zs − ${esc(boardZe(job, currentBoard).source)}</button><p class="muted" id="fcalcnote">${esc(boardZe(job, currentBoard).note || '')}</p>` : ''}
+    ${field === 'zs' ? `<button class="btn big" id="fcalc">Σ Calculate all: Zs = ${esc(boardZe(job, currentBoard).source)} + (R1+R2)</button><p class="muted" id="fcalcnote">${boardZe(job, currentBoard).value == null ? `<b style="color:var(--bad)">${esc(boardZe(job, currentBoard).note || 'No Ze recorded')} – enter Ze on the Supply tab first.</b>` : `${esc(boardZe(job, currentBoard).source)} = ${esc(boardZe(job, currentBoard).value)} Ω${boardZe(job, currentBoard).note ? ' · ' + esc(boardZe(job, currentBoard).note) : ''}`}</p>` : ''}
     <label class="chk"><input type="checkbox" id="fow"> Overwrite cells that already have a value</label>
     <label class="chk"><input type="checkbox" id="fsk" checked> Skip spare / untested circuits</label>
     <p id="fprev" class="muted" style="font-size:15px"></p>
     <div class="btns"><button class="btn" id="mclose">Cancel</button><button class="btn pri" id="fgo" disabled>Fill</button></div>`);
   const upd = () => {
     if (st.calc) {
-      const p = planCalcAll(cs, boardZe(job, currentBoard).value, st);
-      $('#fprev').innerHTML = `Calculates <b>${p.fills}</b> empty cell${p.fills === 1 ? '' : 's'}${p.replaces ? `, replaces <b>${p.replaces}</b>` : ''}${p.skipped ? ` · ${p.skipped} skipped` : ''}${p.bad ? ` · ${p.bad} with unusable Zs/Ze` : ''}`;
+      const p = planCalcZsAll(cs, boardZe(job, currentBoard).value, st);
+      $('#fprev').innerHTML = p.noZe ? '<b style="color:var(--bad)">No Ze value – enter Ze on the Supply tab, then try again.</b>' : `Calculates <b>${p.fills}</b> empty Zs cell${p.fills === 1 ? '' : 's'}${p.replaces ? `, replaces <b>${p.replaces}</b>` : ''}${p.skipped ? ` · ${p.skipped} skipped (already has Zs / spare)` : ''}${p.noR ? ` · ${p.noR} without R1+R2` : ''}${p.bad ? ` · ${p.bad} with unusable R1+R2` : ''}`;
       $('#fgo').disabled = !p.changes.length; $('#fgo').textContent = p.changes.length ? `Calculate ${p.changes.length}` : 'Calculate';
       return p;
     }
@@ -1112,7 +1115,7 @@ function fmicSetup() {
   document.body.appendChild(fmicBtn);
   const place = () => { if (!fmicEl || !document.contains(fmicEl)) { fmicBtn.style.display = 'none'; return; }
     const r = fmicEl.getBoundingClientRect(); fmicBtn.style.top = Math.max(4, r.top + Math.min(r.height, 44) / 2 - 20) + 'px'; fmicBtn.style.left = Math.min(innerWidth - 44, r.right - 44) + 'px'; fmicBtn.style.display = 'block'; };
-  document.addEventListener('focusin', e => { const el = e.target; if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) || FMIC_SKIP.test(el.type) || el.readOnly || el.disabled || el.closest('#modal')) return; fmicEl = el; place(); });
+  document.addEventListener('focusin', e => { const el = e.target; if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) || FMIC_SKIP.test(el.type) || el.readOnly || el.disabled || el.closest('#modal') || (el.closest('table.ct') && el.dataset.c !== 'desc' && el.dataset.c !== 'remarks')) { fmicEl = null; if (fmicBtn && !fmicBtn.dataset.on) fmicBtn.style.display = 'none'; return; } fmicEl = el; place(); });
   document.addEventListener('focusout', () => setTimeout(() => { if (document.activeElement !== fmicEl && !fmicBtn.dataset.on) fmicBtn.style.display = 'none'; }, 150));
   addEventListener('scroll', () => fmicEl && fmicBtn.style.display === 'block' && place(), { passive: true }); addEventListener('resize', place);
   fmicBtn.addEventListener('pointerdown', e => e.preventDefault()); // keep focus in the field
