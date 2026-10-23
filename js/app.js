@@ -601,6 +601,12 @@ const COLS = [
   ['polarity', 'Pol', 'cyc'], ['zs', 'Zs Ω', 'num', 'w2', 'Tests'], ['rcdTime', 'RCD ms', 'num', 'w2'], ['rcd5x', '5× ms', 'num', 'w2'], ['rcdBtn', 'RCD btn', 'cyc'], ['afddBtn', 'AFDD btn', 'cyc'],
   ['remarks', 'Remarks', 'text', 'w5'],
 ];
+// Column groups for the sticky group header row (first COLS entry, Description, is the sticky column).
+const CGROUPS = [['', 'wiring'], ['Conductors', 'live'], ['Overcurrent device', 'bsen'], ['RCD', 'rcdBsen'], ['', 'maxZs'], ['Ring final (Ω)', 'r1'], ['Continuity (Ω)', 'r1r2'], ['Insulation', 'testV'], ['Test results', 'polarity'], ['', 'remarks']];
+function colGroups() {
+  const idx = CGROUPS.map(([label, key]) => [label, COLS.findIndex(c => c[0] === key)]);
+  return idx.map(([label, i], k) => ({ label, n: (k + 1 < idx.length ? idx[k + 1][1] : COLS.length) - i }));
+}
 function cell(c, col, ci) { const h = cell0(c, col, ci); if (c.typ?.[col[0]]) return `<div class="impwrap">${h.replace(/^<(input|select)/, '<$1 data-typ="1"')}<span class="typtag">typ</span></div>`; return c.imp?.[col[0]] ? `<div class="impwrap">${h.replace(/^<(input|select)/, '<$1 data-imp="1"')}<span class="imptag">AI</span></div>` : h; }
 function cell0(c, [k, , kind, opt], ci) {
   const v = c[k] ?? '';
@@ -633,8 +639,9 @@ function renderBoards() {
     <div class="muted">Quick add:</div><div class="fillbar">${QUICK_CIRCUITS.map((q, i) => `<button class="btn" data-q="${i}">＋ ${esc(q.name)}</button>`).join('')}<button class="btn" data-q="-1">＋ Blank</button></div>
     <div class="muted">Fill all rows:</div><div class="fillbar"><button class="btn" data-fill="polarity">Polarity ✓</button><button class="btn" data-fill="testV">IR 500 V</button><button class="btn" data-fill="ir">IR &gt;999</button><button class="btn" data-fill="rcdBtn">RCD btn ✓</button><button class="btn" data-fill="afddBtn">AFDD N/A</button><button class="btn" data-fill="bc">kA 6</button><button class="btn" id="domDef">🏠 Domestic defaults</button></div>
     <div class="tbl-wrap"><table class="ct"><thead>
-      <tr><th>No</th>${COLS.map(c => `<th>${c[1]}${c[2] === 'mz' ? '' : `<br><button class="fillcol" data-fillcol="${c[0]}" aria-label="Fill ${esc(c[1])} column">⬇</button>`}</th>`).join('')}</tr></thead>
-      <tbody>${b.circuits.map((c, i) => `<tr data-r="${i}"><td class="no"><input data-c="no" inputmode="numeric" value="${esc(c.no)}"><button class="rowbtn" data-act="${i}" aria-label="Row actions">⋮</button></td>${COLS.map((col, ci) => `<td${col[2] === 'mz' ? ' class="mzc"' : ''}>${cell(c, col, ci)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
+      <tr class="grp"><th class="no" colspan="2">Circuit</th>${colGroups().map(g => `<th colspan="${g.n}"${g.label ? "" : " class=\"blank\""}><span class="gl">${esc(g.label)}</span></th>`).join('')}</tr>
+      <tr class="hdr"><th class="no">No</th>${COLS.map((c, ci) => `<th${ci === 0 ? ' class="dsc"' : ''}>${c[1]}${c[2] === 'mz' ? '' : `<br><button class="fillcol" data-fillcol="${c[0]}" aria-label="Fill ${esc(c[1])} column">⬇</button>`}</th>`).join('')}</tr></thead>
+      <tbody>${b.circuits.map((c, i) => `<tr data-r="${i}"><td class="no"><input data-c="no" inputmode="numeric" value="${esc(c.no)}"><button class="rowbtn" data-act="${i}" aria-label="Row actions">⋮</button></td>${COLS.map((col, ci) => `<td${col[2] === 'mz' ? ' class="mzc"' : ci === 0 ? ' class="dsc"' : ''}>${cell(c, col, ci)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
     <p class="muted">Max Zs fills from BS 7671 tables for BS EN 60898/61009 B, C, D (type a value to override). Red = fails, amber = check. Rule of thumb (0.8×): ${settings.zsRuleOfThumb ? 'ON' : 'OFF'} (Settings). Use “>999” for over-range IR and “LIM” where a test was not possible.</p></div>` : '<div class="card"><p>No boards yet.</p></div>'}
   <div class="card"><h2>Test instruments</h2>
     <div class="row">${fld('instruments.multi', 'Multi-function')}${fld('instruments.ir', 'Insulation')}</div>
@@ -734,7 +741,7 @@ function markRow(tr, c, b) {
 function markRows(b) { main.querySelectorAll('table.ct tbody tr').forEach(tr => markRow(tr, b.circuits[+tr.dataset.r], b)); }
 
 // ---------- AI board photo import ----------
-const APP_VERSION = '1.10.0';
+const APP_VERSION = '1.11.0';
 const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`${what} timed out after ${ms / 1000} s`)), ms))]);
 function drawToJpeg(src, w, h, max, q) {
   const s = Math.min(1, max / Math.max(w, h)); const cv = document.createElement('canvas');

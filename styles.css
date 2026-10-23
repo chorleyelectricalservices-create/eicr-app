@@ -56,13 +56,22 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--acc2);bo
 .issue.warn{background:#fffbeb}.issue b{min-width:20px}
 .issue small{display:block;color:var(--mut)}
 /* circuit table */
-.tbl-wrap{overflow:auto;max-height:70vh;border:1px solid var(--line);border-radius:10px;background:#fff;-webkit-overflow-scrolling:touch}
-table.ct{border-collapse:separate;border-spacing:0;font-size:14px}
-table.ct th{position:sticky;top:0;background:#e2e8f0;z-index:3;font-size:11px;padding:4px;text-align:center;border-bottom:1px solid var(--line);white-space:nowrap}
-table.ct th.grp{font-size:10px;color:var(--mut)}
-table.ct td{border-bottom:1px solid #e2e8f0;border-right:1px solid #f1f5f9;padding:2px}
-table.ct td:first-child,table.ct th:first-child{position:sticky;left:0;z-index:2;background:#f8fafc}
-table.ct th:first-child{z-index:4;background:#e2e8f0}
+.tbl-wrap{overflow:auto;max-height:calc(100dvh - 150px);min-height:260px;border:1px solid var(--line);border-radius:10px;background:#fff;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;position:relative;scroll-margin-top:124px}
+table.ct{border-collapse:separate;border-spacing:0;font-size:14px;--gh:24px;--nw:92px;--dw:132px}
+table.ct td{border-bottom:1px solid #e2e8f0;border-right:1px solid #f1f5f9;padding:2px;background:#fff}
+table.ct th{position:sticky;background:#e2e8f0;font-size:11px;padding:4px;text-align:center;border-bottom:1px solid #cbd5e1;border-right:1px solid #cbd5e1;white-space:nowrap;background-clip:padding-box}
+/* header rows stick to the top of the scroll box; group row first, column labels under it */
+table.ct tr.grp th{top:0;height:var(--gh);box-sizing:border-box;line-height:19px;z-index:5;background:#01264d;color:#fff;font-size:11px;font-weight:700;letter-spacing:.02em;padding:2px 6px;text-align:left}
+table.ct tr.grp th.blank{background:#0b3566}
+table.ct tr.hdr th{top:var(--gh);z-index:5}
+/* first columns (No + Description) stick to the left */
+table.ct .no{position:sticky;left:0;width:var(--nw);min-width:var(--nw);max-width:var(--nw);z-index:3;background:#f8fafc}
+table.ct .dsc{position:sticky;left:var(--nw);width:var(--dw);min-width:var(--dw);max-width:var(--dw);z-index:3;background:#f8fafc;box-shadow:2px 0 0 #94a3b8}
+table.ct .dsc input{width:100%!important;text-align:left}
+table.ct tr.hdr th.no,table.ct tr.hdr th.dsc{z-index:7;background:#e2e8f0}
+table.ct tr.grp th.no{z-index:8;left:0;width:auto;max-width:none;background:#01264d;box-shadow:2px 0 0 #94a3b8}
+table.ct tr:focus-within td.no,table.ct tr:focus-within td.dsc{background:#e0f2fe}
+@media (min-width:700px){table.ct{--dw:180px}}
 table.ct input,table.ct select{min-height:44px;height:44px;border-radius:6px;border-width:1px;padding:4px 5px;font-size:15px;text-align:center}
 table.ct input.w1{width:46px}table.ct input.w2{width:62px}table.ct input.w3{width:76px}table.ct input.w5{width:170px;text-align:left}
 table.ct select{width:58px;padding:0 2px}
@@ -70,7 +79,6 @@ table.ct .cyc{min-height:44px;width:52px;border:1px solid var(--line);border-rad
 table.ct .err{border-color:var(--bad);background:#fef2f2;color:var(--bad)}
 table.ct .wrn{border-color:#f59e0b;background:#fffbeb}
 table.ct td.mz{font-weight:700;color:var(--acc);text-align:center;min-width:56px}
-table.ct td.no{min-width:96px}
 table.ct td.no input{width:42px}
 table.ct .rowbtn{min-height:44px;min-width:40px;border:0;background:none;font-size:20px}
 .fillbar{display:flex;gap:6px;overflow-x:auto;padding:4px 0 8px}
@@ -111,3 +119,4 @@ table.imprev input.unread{background:#fff7ed;border-color:#f39200}
 b.warn{color:#c2410c}
 table.ct [data-typ]{background:#f0fdf4;border-color:#16a34a}
 .typtag{position:absolute;left:3px;top:-1px;font-size:9px;font-weight:700;color:#15803d;background:#fff;padding:0 2px;border-radius:3px}
+table.ct tr.grp th .gl{position:sticky;left:calc(var(--nw) + var(--dw) + 8px);display:inline-block}
