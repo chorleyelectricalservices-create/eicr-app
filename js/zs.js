@@ -1,16 +1,25 @@
-// Maximum earth fault loop impedance (Zs) values, ohms, for U0 = 230 V, Cmin 0.95,
-// as tabulated in BS 7671 Chapter 41 (Tables 41.2 / 41.3), 0.4 s disconnection
-// for final circuits <= 63 A (5 s for distribution circuits shown where it differs).
-// Values are the tabulated maxima (conductor at operating temperature).
-const MCB = {
-  B: { 6: 7.28, 10: 4.37, 16: 2.73, 20: 2.19, 25: 1.75, 32: 1.37, 40: 1.09, 50: 0.87, 63: 0.69, 80: 0.55, 100: 0.44, 125: 0.35 },
-  C: { 6: 3.64, 10: 2.19, 16: 1.37, 20: 1.09, 25: 0.87, 32: 0.68, 40: 0.55, 50: 0.44, 63: 0.35, 80: 0.27, 100: 0.22, 125: 0.17 },
-  D: { 6: 1.82, 10: 1.09, 16: 0.68, 20: 0.55, 25: 0.44, 32: 0.34, 40: 0.27, 50: 0.22, 63: 0.17, 80: 0.14, 100: 0.11, 125: 0.09 },
-};
-// Type D at 5 s (Table 41.3 is 0.4 s only for B/C as instantaneous trip governs; D differs)
-const MCB_D_5S = { 6: 3.64, 10: 2.19, 16: 1.37, 20: 1.09, 25: 0.87, 32: 0.68, 40: 0.55, 50: 0.44, 63: 0.35, 80: 0.27, 100: 0.22, 125: 0.17 };
-// Fuses (BS 3036, BS 88-2/-3) and older BS 3871 MCBs are not tabulated here yet:
-// enter max Zs manually for those circuits.
+// Maximum earth fault loop impedance (Zs) limits, ohms, for circuit-breakers to BS EN 60898 and
+// RCBOs to BS EN 61009 (U0 = 230 V). These are CALCULATED here from the BS 7671 Chapter 41 method,
+// not copied from a published table:
+//   Zs(max) = Cmin x U0 / Ia, with Cmin = 0.95 and U0 = 230 V
+//   Ia = current that gives instantaneous tripping: 5 x In (Type B), 10 x In (Type C), 20 x In (Type D)
+//   For a Type D device at 5 s disconnection, Ia = 10 x In is used.
+// Results are rounded to 2 decimal places (conductor at operating temperature).
+export const CMIN = 0.95, U0 = 230;
+export const MCB_RATINGS = [6, 10, 16, 20, 25, 32, 40, 50, 63, 80, 100, 125];
+const TRIP_MULTIPLE = { B: 5, C: 10, D: 20 };
+const round2 = v => Math.round(v * 100) / 100;
+/** Calculated max Zs for a B/C/D circuit-breaker or RCBO. */
+export function mcbMaxZs(type, rating, discTime = 0.4) {
+  const t = String(type || '').toUpperCase().trim(); const In = Number(rating);
+  let k = TRIP_MULTIPLE[t];
+  if (!k || !MCB_RATINGS.includes(In)) return null;
+  if (t === 'D' && Number(discTime) >= 5) k = 10;
+  return round2((CMIN * U0) / (k * In));
+}
+// Fuses (BS 3036, BS 88-2/-3, BS 1361) and older BS 3871 MCBs: CertPad has NO built-in table for these;
+// the user enters max Zs by hand. Any future fuse/RCBO table taken from product time/current curves or
+// published BS 7671 tables is PENDING SOLICITOR REVIEW (copyright / database right) before it is added.
 
 export function normBsen(s) {
   const t = String(s || '').toUpperCase().replace(/\s+/g, '').replace(/^BS(EN)?/, '');
@@ -25,7 +34,7 @@ export function normBsen(s) {
 }
 
 /**
- * Tabulated max Zs for a device, or null if not in our tables.
+ * Max Zs for a device (calculated for B/C/D MCBs and RCBOs) for a device, or null if not in our tables.
  * @param {string} bsen e.g. "60898", "BS EN 61009"
  * @param {string} type e.g. "B", "C", "D", "1".."3", "gG"
  * @param {number|string} rating amps
@@ -38,8 +47,7 @@ export function tableMaxZs(bsen, type, rating, discTime = 0.4) {
   const dt = Number(discTime) >= 5 ? '5' : '0.4';
   if (!r) return null;
   if (b === '60898' || b === '61009') {
-    if (t === 'D' && dt === '5') return MCB_D_5S[r] ?? null;
-    return MCB[t]?.[r] ?? null;
+    return mcbMaxZs(t, r, dt);
   }
   return null;
 }
