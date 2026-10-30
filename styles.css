@@ -120,13 +120,6 @@ b.warn{color:#c2410c}
 table.ct [data-typ]{background:#f0fdf4;border-color:#16a34a}
 .typtag{position:absolute;left:3px;top:-1px;font-size:9px;font-weight:700;color:#15803d;background:#fff;padding:0 2px;border-radius:3px}
 table.ct tr.grp th .gl{position:sticky;left:calc(var(--nw) + var(--dw) + 8px);display:inline-block}
-/* Copy for Electraform */
-.cps>summary{cursor:pointer;list-style:none;padding:2px 0}.cps>summary::-webkit-details-marker{display:none}
-.cpf{display:grid;grid-template-columns:1fr auto;grid-template-areas:"l t" "v t";gap:0 8px;width:100%;text-align:left;border:0;border-bottom:1px solid #e2e8f0;background:#fff;padding:10px 4px;font:inherit;min-height:var(--h);color:var(--ink)}
-.cpf .cpl{grid-area:l;font-size:12px;color:var(--mut)}.cpf .cpv{grid-area:v;font-size:17px;font-weight:600;white-space:pre-wrap;word-break:break-word;user-select:text}
-.cpf .cpt{grid-area:t;align-self:center;font-size:20px;color:var(--acc);min-width:28px;text-align:center}
-.cpf.done{background:#f0fdf4}.cpf.done .cpt{color:#16a34a;font-weight:800}
-.cpc{border:1px solid var(--line);border-radius:10px;margin:6px 0;padding:6px 8px;background:#fff}.cpc>summary{min-height:40px;display:flex;align-items:center;gap:6px;cursor:pointer}.cpc.done{background:#f0fdf4}
 /* compact pinned columns while scrolled sideways (v1.15) */
 table.ct.compact{--nw:36px;--dw:76px}
 table.ct.compact td.no input{width:30px;padding:2px;font-size:13px}

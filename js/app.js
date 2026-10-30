@@ -11,7 +11,6 @@ import { planDomestic, markTyp, DEFAULT_RULES_TEXT, migrateRules } from './domes
 import { ai, AI_TIMEOUT_MS, aiCfg, PROVIDERS, getKey, setKey, planImport, markImported, boardPlan } from './ai.js';
 import { parseDictation, FIELD_LABELS } from './voice.js';
 import { MD_CATS, demandRows, computeDemand, supplyLimit } from './maxdemand.js';
-import { copySections, sectionText, copyProgress, CIRCUIT_COLS } from './copyview.js';
 import { fieldKind, normaliseForField, formatPostcode } from './fieldvoice.js';
 import { ADDR_PROVIDERS, getAddrKey, setAddrKey, lookupPostcode, formatAddress } from './address.js';
 import { boardZe, calcZs, planCalcZsAll, markCalc } from './calc.js';
@@ -105,11 +104,6 @@ async function route() {
     $('#micFab').hidden = !['boards', 'supply'].includes(tab);
     main.innerHTML = ''; window.scrollTo(0, 0);
     VIEWS[tab]?.();
-  } else if (parts[0] === 'copy' && parts[1]) {
-    if (!job || job.id !== parts[1]) { if (job) await db.putJob(job); job = await db.getJob(parts[1]); currentBoard = 0; }
-    if (!job) { location.hash = '#/'; return; }
-    migrate(job); $('#backBtn').hidden = false; refreshHeader(); $('#topSub').textContent = 'Copy for Electraform';
-    window.scrollTo(0, 0); renderCopy();
   } else if (parts[0] === 'settings') {
     if (job) await db.putJob(job);
     $('#backBtn').hidden = false; $('#topTitle').textContent = 'Settings'; $('#topSub').textContent = 'Your details, logo, instruments';
@@ -562,7 +556,7 @@ const VIEWS = {
     main.innerHTML = `<div class="card"><h2>Check & issue</h2>
       <div class="assess ${a === 'SATISFACTORY' ? 'ok' : 'bad'}">${a}</div>
       <p><b style="color:var(--bad)">${sm.errors} must fix</b> · <b style="color:var(--warn)">${sm.warnings} to check</b></p>
-      <button class="btn pri big" id="pdf">📄 Create PDF</button><a class="btn big" href="#/copy/${job.id}" style="display:flex;align-items:center;justify-content:center;text-decoration:none">📋 Copy for Electraform</a><button class="btn" id="schedPdf">Circuit schedule only</button>
+      <button class="btn pri big" id="pdf">📄 Create PDF</button><button class="btn" id="schedPdf">Circuit schedule only</button>
       <button class="btn big" id="share">📤 Share PDF (email, WhatsApp…)</button>
       <button class="btn big" id="issue">${job.status === 'issued' ? '↩ Mark as draft' : '✅ Mark as issued'}</button>
       <button class="btn big" id="json">⬇ Export this job (JSON)</button></div>
@@ -753,7 +747,7 @@ function markRow(tr, c, b) {
 function markRows(b) { main.querySelectorAll('table.ct tbody tr').forEach(tr => markRow(tr, b.circuits[+tr.dataset.r], b)); }
 
 // ---------- AI board photo import ----------
-const APP_VERSION = '1.16.0';
+const APP_VERSION = '1.17.0';
 const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`${what} timed out after ${ms / 1000} s`)), ms))]);
 function drawToJpeg(src, w, h, max, q) {
   const s = Math.min(1, max / Math.max(w, h)); const cv = document.createElement('canvas');
@@ -1150,48 +1144,6 @@ function insertDictated(el, text, kind) {
   el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true }));
 }
 fmicSetup();
-
-// ---------- Copy for Electraform (tap-to-copy sheet; no automation of Electraform) ----------
-async function copyText(t) {
-  try { if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(t); return true; } } catch {}
-  const ta = document.createElement('textarea'); ta.value = t; ta.setAttribute('readonly', ''); ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
-  document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, t.length); let ok = false; try { ok = document.execCommand('copy'); } catch {} ta.remove(); return ok;
-}
-function renderCopy() {
-  fresh();
-  job.copyTicks ??= {};
-  const T = job.copyTicks; const secs = copySections(job, settings);
-  const fieldRow = f => `<button type="button" class="cpf${T[f.key] ? ' done' : ''}" data-ck="${esc(f.key)}" data-cv="${esc(f.value)}"><span class="cpl">${esc(f.label)}</span><span class="cpv">${esc(f.value)}</span><span class="cpt">${T[f.key] ? '✓' : '📋'}</span></button>`;
-  const secHtml = (sec, si) => {
-    const filled = sec.fields.filter(f => f.value); const empty = sec.fields.length - filled.length;
-    const allDone = filled.length && filled.every(f => T[f.key]) && (sec.circuits || []).every(c => T[c.key]);
-    const circ = (sec.circuits || []).map(c => `<details class="cpc${T[c.key] ? ' done' : ''}"><summary><b>${T[c.key] ? '✓ ' : ''}${esc(c.no)}</b> ${esc(c.desc || '')}</summary>
-      <div class="btns"><button class="btn pri" data-row="${esc(c.key)}" data-cv="${esc(c.tsv)}">📋 Copy row (tab-separated)</button><button class="btn" data-tickrow="${esc(c.key)}">${T[c.key] ? 'Untick' : '✓ Mark done'}</button></div>
-      ${c.fields.filter(f => f.value).map(fieldRow).join('')}</details>`).join('');
-    return `<details class="card cps" data-si="${si}" ${si < 2 ? 'open' : ''}><summary><h2 style="display:inline">${allDone ? '✓ ' : ''}${esc(sec.title)}</h2></summary>
-      ${filled.length ? `<div class="btns"><button class="btn" data-sec="${si}">📋 Copy whole section</button></div>` : ''}
-      ${filled.map(fieldRow).join('')}${empty ? `<p class="muted">${empty} empty field${empty === 1 ? '' : 's'} not shown</p>` : ''}
-      ${sec.circuits ? `<p class="muted">Circuits (${sec.circuits.length}) – column order: ${esc(CIRCUIT_COLS.map(c => c[1]).join(' · '))}</p>${circ}` : ''}</details>`;
-  };
-  const pr = copyProgress(secs, T);
-  main.innerHTML = `<div class="card"><h2>📋 Copy for Electraform</h2>
-    <p class="muted">Tap a value to copy it, then paste into the same box in Electraform. Copied items get a ✓ so you can track progress. Sections follow the IET model form order that Electraform uses.</p>
-    <p><b id="cpprog">${pr.done} / ${pr.total}</b> copied</p>
-    <div class="btns"><button class="btn" id="cpExpand">Expand all</button><button class="btn danger" id="cpReset">Reset ticks</button><a class="btn" href="#/job/${job.id}/check" style="text-decoration:none;display:inline-flex;align-items:center">‹ Back to job</a></div></div>
-    ${secs.map(secHtml).join('')}`;
-  const mark = (k, on = true) => { if (on) T[k] = Date.now(); else delete T[k]; scheduleSave(); };
-  const refresh = () => { const y = scrollY; const open = [...main.querySelectorAll('details[open]')].map(d => d.dataset.si ?? d.querySelector('[data-row]')?.dataset.row); renderCopy();
-    main.querySelectorAll('details').forEach(d => { const id = d.dataset.si ?? d.querySelector('[data-row]')?.dataset.row; d.open = open.includes(id); }); scrollTo(0, y); };
-  main.onclick = async e => {
-    const f = e.target.closest('[data-ck]'), sb = e.target.closest('[data-sec]'), rb = e.target.closest('[data-row]'), tr = e.target.closest('[data-tickrow]');
-    if (f) { if (await copyText(f.dataset.cv)) { mark(f.dataset.ck); toast('Copied', 900); } else toast('Copy failed – long-press the value to copy', 2500); refresh(); return; }
-    if (sb) { const sec = secs[+sb.dataset.sec]; if (await copyText(sectionText(sec))) { sec.fields.filter(x => x.value).forEach(x => mark(x.key)); toast('Section copied', 1200); } refresh(); return; }
-    if (rb) { if (await copyText(rb.dataset.cv)) { mark(rb.dataset.row); toast('Row copied', 1200); } refresh(); return; }
-    if (tr) { mark(tr.dataset.tickrow, !T[tr.dataset.tickrow]); refresh(); return; }
-    if (e.target.id === 'cpExpand') main.querySelectorAll('details.cps').forEach(d => (d.open = true));
-    if (e.target.id === 'cpReset' && confirm('Clear all copied ticks for this job?')) { job.copyTicks = {}; scheduleSave(); renderCopy(); }
-  };
-}
 
 // ---------- maximum demand estimate (OSG Appendix A diversity) ----------
 function maxDemandSheet() {
