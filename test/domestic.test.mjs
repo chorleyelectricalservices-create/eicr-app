@@ -14,7 +14,8 @@ test('typical UK domestic sizes', () => {
   assert.equal(m('Cooker', '32'), '6.0/2.5');
   assert.equal(m('Cooker', '45'), '10/4.0');
   assert.equal(m('Electric shower', '40'), '10/4.0');
-  assert.equal(m('Shower', '32'), '6.0/2.5');
+  assert.equal(m('Shower', '32'), '10/4.0');
+  assert.equal(m('Shower', '45'), '10/4.0');
   assert.equal(m('Immersion heater', '16'), '2.5/1.5');
   assert.equal(m('Boiler', '6'), '1.5/1.0');
   assert.equal(m('FCU', '16'), '2.5/1.5');
@@ -39,3 +40,15 @@ test('custom rules from Settings', () => {
   assert.deepEqual(plan[1].set, { wiring: 'F', refMethod: 'D', live: '6.0', cpc: '2.5' });
 });
 test('typ marking', () => { const c = {}; markTyp(c, 'live', true); assert.deepEqual(c.typ, { live: true }); markTyp(c, 'live', false); assert.deepEqual(c.typ, {}); });
+
+import { migrateRules, OLD_DEFAULT_RULES_TEXT, DEFAULT_RULES_TEXT as NEWDEF } from '../js/domestic.js';
+test('migrate saved rules: old shower lines upgraded, custom kept', () => {
+  assert.equal(migrateRules(null), null);
+  assert.equal(migrateRules(OLD_DEFAULT_RULES_TEXT), null);
+  const edited = OLD_DEFAULT_RULES_TEXT.replace('ring | 32 | 2.5/1.5', 'ring | 32 | 4.0/1.5');
+  const out = migrateRules(edited);
+  assert.ok(out.includes('shower | 6-63 | 10/4.0 | A | C') && !out.includes('shower | 32 | 6.0/2.5') && out.includes('ring | 32 | 4.0/1.5'));
+  const custom = OLD_DEFAULT_RULES_TEXT.replace('shower | 32 | 6.0/2.5', 'shower | 32 | 6.0/1.5');
+  assert.equal(migrateRules(custom), custom);
+  assert.ok(NEWDEF.includes('shower | 6-63 | 10/4.0'));
+});

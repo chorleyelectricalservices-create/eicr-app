@@ -5,8 +5,7 @@ import { isSpare } from './fill.js';
 // First matching line wins. Keywords match the circuit description (case-insensitive, start of word).
 export const DEFAULT_RULES_TEXT = `smoke, alarm, detector, heat det | 6 | 1.0/1.0 | A | C
 light, lts, ltg, lamp | 3-10 | 1.0/1.0 | A | C
-shower | 40-50 | 10/4.0 | A | C
-shower | 32 | 6.0/2.5 | A | C
+shower | 6-63 | 10/4.0 | A | C
 cooker, oven, hob | 40-50 | 10/4.0 | A | C
 cooker, oven, hob | 32 | 6.0/2.5 | A | C
 immersion, imm | 13-16 | 2.5/1.5 | A | C
@@ -52,3 +51,17 @@ export function planDomestic(circuits, rulesText = DEFAULT_RULES_TEXT, onlyIdx =
   return { plan, unknown, spare };
 }
 export function markTyp(c, field, on) { if (on) (c.typ ??= {})[field] = true; else if (c.typ) delete c.typ[field]; }
+
+// v1.16: showers default to 10/4.0 mm² at any rating. Old built-in shower lines, if still untouched in saved rules, are upgraded.
+const OLD_SHOWER = ['shower | 40-50 | 10/4.0 | A | C', 'shower | 32 | 6.0/2.5 | A | C'];
+export const OLD_DEFAULT_RULES_TEXT = DEFAULT_RULES_TEXT.replace('shower | 6-63 | 10/4.0 | A | C', OLD_SHOWER.join('\n'));
+/** Returns migrated rules text (null = built-in). Custom shower rules are left alone. */
+export function migrateRules(text) {
+  if (text == null) return null;
+  const norm = t => String(t).split('\n').map(l => l.trim().replace(/\s*\|\s*/g, ' | ')).join('\n');
+  const t = norm(text);
+  if (t === norm(OLD_DEFAULT_RULES_TEXT) || t === norm(DEFAULT_RULES_TEXT)) return null;
+  const lines = t.split('\n'); const i = lines.indexOf(OLD_SHOWER[0]);
+  if (i >= 0 && lines[i + 1] === OLD_SHOWER[1]) { lines.splice(i, 2, 'shower | 6-63 | 10/4.0 | A | C'); return lines.join('\n'); }
+  return text;
+}

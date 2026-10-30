@@ -7,7 +7,7 @@ import { tableMaxZs } from './zs.js';
 import { buildReport } from './pdf.js';
 import { sampleJob } from './sample.js';
 import { allocateRef, planRestore, isDuplicate, maxRefNum, DEFAULT_REF_PREFIX, cleanPrefix } from './refno.js';
-import { planDomestic, markTyp, DEFAULT_RULES_TEXT } from './domestic.js';
+import { planDomestic, markTyp, DEFAULT_RULES_TEXT, migrateRules } from './domestic.js';
 import { ai, AI_TIMEOUT_MS, aiCfg, PROVIDERS, getKey, setKey, planImport, markImported, boardPlan } from './ai.js';
 import { parseDictation, FIELD_LABELS } from './voice.js';
 import { MD_CATS, demandRows, computeDemand, supplyLimit } from './maxdemand.js';
@@ -753,7 +753,7 @@ function markRow(tr, c, b) {
 function markRows(b) { main.querySelectorAll('table.ct tbody tr').forEach(tr => markRow(tr, b.circuits[+tr.dataset.r], b)); }
 
 // ---------- AI board photo import ----------
-const APP_VERSION = '1.15.0';
+const APP_VERSION = '1.16.0';
 const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`${what} timed out after ${ms / 1000} s`)), ms))]);
 function drawToJpeg(src, w, h, max, q) {
   const s = Math.min(1, max / Math.max(w, h)); const cv = document.createElement('canvas');
@@ -1102,6 +1102,7 @@ function signaturePad(done) {
 (async function boot() {
   const s = await db.getKV('settings');
   settings = { ...defaultSettings(), ...(s || {}) };
+  { const m = migrateRules(settings.domesticRules); if (m !== settings.domesticRules) { settings.domesticRules = m; saveSettings(); } }
   for (const k of ['contractor', 'inspector', 'instruments']) settings[k] = { ...defaultSettings()[k], ...(settings[k] || {}) };
   if (!settings.contractor.name || settings.contractor.name === 'Daniels Electrical') { settings.contractor.name = defaultSettings().contractor.name; await saveSettings(); }
   if (!settings.contractor.logo && !settings.contractor.logoRemoved) { settings.contractor.logo = defaultSettings().contractor.logo; await saveSettings(); }
