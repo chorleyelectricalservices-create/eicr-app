@@ -127,3 +127,11 @@ table.ct tr.grp th .gl{position:sticky;left:calc(var(--nw) + var(--dw) + 8px);di
 .cpf .cpt{grid-area:t;align-self:center;font-size:20px;color:var(--acc);min-width:28px;text-align:center}
 .cpf.done{background:#f0fdf4}.cpf.done .cpt{color:#16a34a;font-weight:800}
 .cpc{border:1px solid var(--line);border-radius:10px;margin:6px 0;padding:6px 8px;background:#fff}.cpc>summary{min-height:40px;display:flex;align-items:center;gap:6px;cursor:pointer}.cpc.done{background:#f0fdf4}
+/* compact pinned columns while scrolled sideways (v1.15) */
+table.ct.compact{--nw:36px;--dw:76px}
+table.ct.compact td.no input{width:30px;padding:2px;font-size:13px}
+table.ct.compact td.no .rowbtn,table.ct.compact th.dsc .fillcol{display:none}
+table.ct.compact .dsc input{font-size:12px;padding:2px 4px;text-overflow:ellipsis;white-space:nowrap;overflow:hidden}
+table.ct.compact tr.hdr th.no,table.ct.compact tr.hdr th.dsc{font-size:10px;padding:2px}
+table.ct.compact .dsc .impwrap .imptag,table.ct.compact .dsc .typtag{display:none}
+.descpeek{position:fixed;z-index:60;max-width:80vw;background:#0f172a;color:#fff;padding:8px 12px;border-radius:10px;font-size:15px;box-shadow:0 4px 14px #0005;pointer-events:none}

@@ -659,6 +659,7 @@ function renderBoards() {
     <div class="btns"><button class="btn" id="instSave">☆ Save as my default instruments</button><button class="btn" id="instLoad">↺ Load my saved instruments</button></div></div>`;
   bindFields(main, job, p => { if (/\.ref$/.test(p)) main.querySelector(`[data-b="${currentBoard}"]`).textContent = getP(job, p); });
   if (b) markRows(b);
+  setupCompactCols();
   const tbody = main.querySelector('table.ct tbody');
   tbody?.addEventListener('focusin', e => { const tr = e.target.closest('tr[data-r]'); if (tr) selRow = +tr.dataset.r; });
   tbody?.addEventListener('input', e => {
@@ -752,7 +753,7 @@ function markRow(tr, c, b) {
 function markRows(b) { main.querySelectorAll('table.ct tbody tr').forEach(tr => markRow(tr, b.circuits[+tr.dataset.r], b)); }
 
 // ---------- AI board photo import ----------
-const APP_VERSION = '1.14.0';
+const APP_VERSION = '1.15.0';
 const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`${what} timed out after ${ms / 1000} s`)), ms))]);
 function drawToJpeg(src, w, h, max, q) {
   const s = Math.min(1, max / Math.max(w, h)); const cv = document.createElement('canvas');
@@ -1215,3 +1216,34 @@ function maxDemandSheet() {
   modal('<div></div>'); draw();
 }
 document.addEventListener('click', e => { if (e.target.closest('#mdCalc')) maxDemandSheet(); });
+
+// ---------- compact pinned columns when scrolled sideways ----------
+let ctCompact = false;
+const CT_ON = 24, CT_OFF = 2;
+function setupCompactCols() {
+  const wrap = main.querySelector('.tbl-wrap'); const tbl = wrap?.querySelector('table.ct:not(.imprev)'); if (!tbl) return;
+  let ignore = false, last = wrap.scrollLeft;
+  const apply = on => {
+    if (on === tbl.classList.contains('compact')) return;
+    const before = tbl.querySelector('td.no')?.offsetWidth + tbl.querySelector('td.dsc')?.offsetWidth || 0;
+    tbl.classList.toggle('compact', on); ctCompact = on;
+    const after = tbl.querySelector('td.no')?.offsetWidth + tbl.querySelector('td.dsc')?.offsetWidth || 0;
+    // keep the same data column under the user's finger: shift scroll by the width change
+    const target = wrap.scrollLeft - (before - after);
+    if (on && target > CT_OFF) { ignore = true; wrap.scrollLeft = target; }
+    if (!on && wrap.scrollLeft > 0) { ignore = true; wrap.scrollLeft = 0; }
+  };
+  // re-render (e.g. after '='): keep compact so the restored scroll position lines up; drop it if we end up at the left edge
+  if (ctCompact) { tbl.classList.add('compact'); requestAnimationFrame(() => requestAnimationFrame(() => { if (wrap.scrollLeft <= CT_OFF) { tbl.classList.remove('compact'); ctCompact = false; } last = wrap.scrollLeft; })); }
+  wrap.addEventListener('scroll', () => {
+    const x = wrap.scrollLeft; if (ignore) { ignore = false; last = x; return; }
+    if (!tbl.classList.contains('compact') && x > CT_ON && x > last) apply(true);
+    else if (tbl.classList.contains('compact') && x <= CT_OFF && x <= last) apply(false);
+    last = x;
+  }, { passive: true });
+  // tap the corner header to toggle; tap/focus a compact description to peek at it in full
+  tbl.querySelector('tr.hdr th.no')?.addEventListener('click', () => apply(!tbl.classList.contains('compact')));
+  tbl.addEventListener('focusin', e => { const el = e.target; if (!tbl.classList.contains('compact') || !el.closest('td.dsc') || !el.value) return;
+    document.querySelector('.descpeek')?.remove(); const r = el.getBoundingClientRect(); const d = document.createElement('div'); d.className = 'descpeek'; d.textContent = el.value;
+    d.style.left = Math.max(8, r.left) + 'px'; d.style.top = Math.max(8, r.top - 44) + 'px'; document.body.appendChild(d); setTimeout(() => d.remove(), 2200); });
+}
