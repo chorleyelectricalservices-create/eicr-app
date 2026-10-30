@@ -10,6 +10,7 @@ import { allocateRef, planRestore, isDuplicate, maxRefNum, DEFAULT_REF_PREFIX, c
 import { planDomestic, markTyp, DEFAULT_RULES_TEXT } from './domestic.js';
 import { ai, AI_TIMEOUT_MS, aiCfg, PROVIDERS, getKey, setKey, planImport, markImported, boardPlan } from './ai.js';
 import { parseDictation, FIELD_LABELS } from './voice.js';
+import { MD_CATS, demandRows, computeDemand, supplyLimit } from './maxdemand.js';
 import { copySections, sectionText, copyProgress, CIRCUIT_COLS } from './copyview.js';
 import { fieldKind, normaliseForField, formatPostcode } from './fieldvoice.js';
 import { ADDR_PROVIDERS, getAddrKey, setAddrKey, lookupPostcode, formatAddress } from './address.js';
@@ -390,6 +391,7 @@ const VIEWS = {
     <div class="card"><h2>J · Particulars at the origin</h2>
       ${fld('origin.meansEarthing', 'Means of earthing', { type: 'seg', options: ["Distributor's facility", 'Electrode'] })}
       <div class="row">${fld('origin.maxDemand', 'Maximum demand', { type: 'num' })}${fld('origin.maxDemandUnit', 'Unit', { type: 'seg', options: ['A', 'kVA'] })}</div>
+      <div class="btns" style="margin-top:-6px"><button class="btn" type="button" id="mdCalc">🧮 Calculate from circuits</button></div>
       <details ${job.origin.meansEarthing === 'Electrode' || job.supply.earthing === 'TT' ? 'open' : ''}><summary class="muted" style="min-height:40px">Earth electrode (TT)</summary>
         <div class="row">${fld('origin.electrodeType', 'Type', { list: ['Rod(s)', 'Tape', 'Plate'] })}${fld('origin.electrodeRa', 'RA (Ω)', { type: 'num' })}</div>${fld('origin.electrodeLocation', 'Location')}</details>
       <h3>Earthing conductor</h3><div class="row">${fld('origin.earthingMaterial', 'Material', { list: ['Copper', 'Aluminium'] })}${fld('origin.earthingCsa', 'csa (mm²)', { type: 'num', list: ['10', '16', '25'] })}</div>${fld('origin.earthingVerified', 'Connection / continuity verified', { type: 'check' })}
@@ -750,7 +752,7 @@ function markRow(tr, c, b) {
 function markRows(b) { main.querySelectorAll('table.ct tbody tr').forEach(tr => markRow(tr, b.circuits[+tr.dataset.r], b)); }
 
 // ---------- AI board photo import ----------
-const APP_VERSION = '1.13.0';
+const APP_VERSION = '1.14.0';
 const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`${what} timed out after ${ms / 1000} s`)), ms))]);
 function drawToJpeg(src, w, h, max, q) {
   const s = Math.min(1, max / Math.max(w, h)); const cv = document.createElement('canvas');
@@ -1188,3 +1190,28 @@ function renderCopy() {
     if (e.target.id === 'cpReset' && confirm('Clear all copied ticks for this job?')) { job.copyTicks = {}; scheduleSave(); renderCopy(); }
   };
 }
+
+// ---------- maximum demand estimate (OSG Appendix A diversity) ----------
+function maxDemandSheet() {
+  job.mdCats ??= {};
+  const draw = () => {
+    const rows = demandRows(job, job.mdCats); const r = computeDemand(rows); const lim = supplyLimit(job);
+    const warn = n => lim != null && n > lim;
+    $('#modalBody').innerHTML = `<h2>🧮 Maximum demand</h2>
+      <p class="muted">Estimate only: uses each circuit's <b>protective device rating</b> as its load and the IET On-Site Guide Appendix A domestic diversity allowances. Check the category for each circuit. Sub-mains feeding a sub-board recorded here are left out and that board's circuits are counted instead, so nothing is counted twice.</p>
+      <div style="overflow:auto;max-height:45vh;border:1px solid var(--line);border-radius:10px"><table class="mdt" style="width:100%;border-collapse:collapse;font-size:13px">
+      <tr><th>Cct</th><th>Description</th><th>A</th><th>Category</th><th>Allow A</th></tr>
+      ${r.lines.map((l, i) => `<tr><td>${esc(l.board)}/${esc(l.no)}</td><td>${esc(l.desc || '')}</td><td>${l.amps || '–'}</td>
+        <td><select data-mdk="${esc(l.key)}" style="min-height:36px;font-size:13px;padding:2px">${Object.entries(MD_CATS).map(([k, v]) => `<option value="${k}"${k === l.cat ? ' selected' : ''}>${esc(v)}</option>`).join('')}</select></td>
+        <td title="${esc(l.note)}"><b>${l.allow ? l.allow.toFixed(1) : '0'}</b><br><small class="muted">${esc(l.note)}</small></td></tr>`).join('')}</table></div>
+      <div class="issue ${warn(r.rawA) ? 'warn' : ''}" style="display:block;margin-top:8px">Sum of device ratings: <b>${r.rawA} A</b>${warn(r.rawA) ? ` (above ${lim} A supply – normal before diversity)` : ''}</div>
+      <div class="issue ${warn(r.estA) ? 'err' : ''}" style="display:block;${warn(r.estA) ? 'background:#fef2f2' : ''}">Estimated max demand after diversity: <b>${r.estA} A</b>${lim != null ? (warn(r.estA) ? ` ⛔ exceeds the ${lim} A supply fuse/main switch – check loads, consider load management or a supply upgrade` : ` (supply ${lim} A)`) : ''}</div>
+      <div class="btns"><button class="btn" id="mclose">Cancel</button><button class="btn" id="mdRaw">Use ${r.rawA} A (sum)</button><button class="btn pri" id="mdEst">Use ${r.estA} A (estimate)</button></div>`;
+    $('#mclose').onclick = closeModal;
+    $('#modalBody').querySelectorAll('[data-mdk]').forEach(sel => (sel.onchange = () => { job.mdCats[sel.dataset.mdk] = sel.value; scheduleSave(); draw(); }));
+    const put = v => { job.origin.maxDemand = String(v); job.origin.maxDemandUnit = 'A'; scheduleSave(); closeModal(); const y = scrollY; VIEWS.supply(); scrollTo(0, y); toast(`Maximum demand set to ${v} A`); };
+    $('#mdRaw').onclick = () => put(r.rawA); $('#mdEst').onclick = () => put(r.estA);
+  };
+  modal('<div></div>'); draw();
+}
+document.addEventListener('click', e => { if (e.target.closest('#mdCalc')) maxDemandSheet(); });
